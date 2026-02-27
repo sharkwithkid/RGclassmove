@@ -10,7 +10,7 @@ import streamlit as st
 
 from core.utils import text_contains
 
-from core.pipeline import (
+from core.pipeline_streamlit import (
     scan_work_root,
     scan_pipeline,
     run_pipeline,

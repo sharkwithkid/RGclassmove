@@ -724,7 +724,7 @@ TRANSFER_HEADER_SLOTS = {
     "no":    ["no", "번호"],
     "grade": ["학년"],
     "class": ["반", "학급"],
-    "number":["번호", "번", "출석번호"],
+    "num":   ["번호", "번"],
     "name":  ["성명", "이름"],
     "remark":["비고", "메모", "특이사항"],
 }
@@ -744,40 +744,6 @@ TEACHER_HEADER_SLOTS = {
     "learn":   ["학습용id신청", "학습용id", "학습용", "학습용아이디"],
     "admin":   ["관리용id신청", "관리용id", "관리용", "관리용아이디"],
 }
-
-# 헤더 감지
-def _build_header_slot_map(ws, header_row: int, slots: Dict[str, List[str]]) -> Dict[str, int]:
-    """
-    slots 정의(FRESHMEN_HEADER_SLOTS 등)를 기준으로
-    실제 엑셀 헤더 행에서 각 slot이 어느 컬럼에 있는지 찾아서
-    {slot: col_idx} 형태로 반환.
-    """
-    # header_map: {헤더텍스트 -> column index}
-    hm = header_map(ws, header_row)
-
-    # 헤더 텍스트를 정규화해서 비교 (공백/마침표 제거, 소문자)
-    norm_to_col: Dict[str, int] = {}
-    for raw_key, col in hm.items():
-        norm_key = _normalize_header_cell(raw_key)
-        if norm_key:
-            norm_to_col[norm_key] = col
-
-    result: Dict[str, int] = {}
-
-    for slot, patterns in slots.items():
-        for pat in patterns:
-            pat_norm = _normalize_header_cell(pat)
-            if not pat_norm:
-                continue
-            # 헤더 정규화 문자열 안에 패턴이 포함되면 매칭
-            for header_norm, col in norm_to_col.items():
-                if pat_norm in header_norm:
-                    result[slot] = col
-                    break
-            if slot in result:
-                break
-
-    return result
 
 def _detect_header_row_generic(ws, slots: Dict[str, List[str]],
                                max_search_row: int = 15,
@@ -947,10 +913,7 @@ def detect_input_layout(xlsx_path: Path, kind: str) -> Dict[str, Any]:
     # 1) 헤더 자동 감지
     if kind_norm == "freshmen":
         header_row = detect_header_row_freshmen(ws)
-        # 🔹 헤더 이름 기준으로 실제 이름 컬럼 찾기
-        slot_cols = _build_header_slot_map(ws, header_row, FRESHMEN_HEADER_SLOTS)
-        name_col = slot_cols.get("name", 5)  # 못 찾으면 기존 E열 fallback
-   
+        name_col = 5  # E열: 성명 (양식 기준 컬럼 위치는 유지)
     elif kind_norm == "transfer":
         header_row = detect_header_row_transfer(ws)
         name_col = 5  # E열: 성명
@@ -1022,15 +985,6 @@ def read_freshmen_rows(
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
-    """
-    신입생 파일을 읽어서
-    [{"grade": 학년(int), "class": 반(str), "number": 번호(str), "name": 이름(str)}, ...]
-    형태로 반환.
-
-    - 학년 / 반 / 이름은 필수
-    - 번호는 없어도 됨(빈 문자열로 처리)
-    - 컬럼 위치는 고정(B,C,D,E)이 아니라 헤더 이름 기준으로 탐색
-    """
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
@@ -1039,81 +993,44 @@ def read_freshmen_rows(
     if header_row is None:
         header_row = detect_header_row_freshmen(ws)
 
-    # 1-1) 헤더에서 실제 컬럼 위치 찾기
-    slot_cols = _build_header_slot_map(ws, header_row, FRESHMEN_HEADER_SLOTS)
-    col_grade = slot_cols.get("grade")
-    col_class = slot_cols.get("class")
-    # 번호는 num(번호/번) 우선, 없으면 no(번호)라도 사용
-    col_num = slot_cols.get("num") or slot_cols.get("no")
-    col_name = slot_cols.get("name")
-
-    missing = []
-    if col_grade is None:
-        missing.append("학년")
-    if col_class is None:
-        missing.append("반")
-    if col_name is None:
-        missing.append("성명/이름")
-
-    # 학년/반/이름은 필수, 번호는 없어도 됨
-    if missing:
-        raise ValueError(
-            "[오류] 신입생 파일 헤더에서 "
-            + ", ".join(missing)
-            + " 열을 찾지 못했습니다. '학년', '반', '이름' 헤더를 추가하거나 수정해 주세요."
-        )
-
     # 2) 예시/데이터 시작 행 자동 감지 (사용자가 data_start_row 직접 준 경우 우선)
     if data_start_row is None:
         _, data_start_row = detect_example_and_data_start(
             ws,
             header_row=header_row,
-            name_col=col_name,
+            name_col=5,  # E열: 성명
         )
 
-    out: List[Dict[str, Any]] = []
+    out = []
     row = data_start_row
     while True:
-        grade = ws.cell(row=row, column=col_grade).value
-        cls   = ws.cell(row=row, column=col_class).value
-        num   = ws.cell(row=row, column=col_num).value if col_num is not None else None
-        name  = ws.cell(row=row, column=col_name).value
+        grade = ws[f"B{row}"].value
+        cls   = ws[f"C{row}"].value
+        num   = ws[f"D{row}"].value
+        name  = ws[f"E{row}"].value
 
         # 1) 행 전체가 비어 있으면 종료
         if all(v is None or str(v).strip() == "" for v in [grade, cls, num, name]):
             break
 
-        # 2) 필수값(학년, 반, 이름) 체크
+        # 2) 필수값만 체크 (학년, 반, 이름)
         if any(v is None or str(v).strip() == "" for v in [grade, cls, name]):
-            raise ValueError(
-                f"[오류] 신입생 파일 {row}행에서 학년/반/이름 중 비어 있는 값이 있습니다."
-            )
+            raise ValueError(f"[오류] 신입생 파일 {row}행에서 학년(B), 반(C), 성명(E)은 필수입니다.")
 
-        # 3) 학년에서 숫자만 추출
+        # 3) 번호는 비어 있어도 허용
         grade_s = str(grade).strip()
         m = re.search(r"\d+", grade_s)
         if not m:
-            raise ValueError(
-                f"[오류] 신입생 파일 {row}행 학년에서 숫자를 찾지 못했습니다: {grade_s!r}"
-            )
+            raise ValueError(f"[오류] 신입생 파일 {row}행 학년(B)에서 숫자를 찾지 못했습니다: {grade_s!r}")
         grade_i = int(m.group(0))
 
         cls_s = str(cls).strip()
         num_s = "" if (num is None or str(num).strip() == "") else str(num).strip()
         name_n = normalize_name(name)
         if not name_n:
-            raise ValueError(
-                f"[오류] 신입생 파일 {row}행 이름 정규화 결과가 비어 있습니다."
-            )
+            raise ValueError(f"[오류] 신입생 파일 {row}행 성명(E) 정규화 결과가 비어 있습니다.")
 
-        out.append(
-            {
-                "grade": grade_i,
-                "class": cls_s,
-                "number": num_s,
-                "name": name_n,
-            }
-        )
+        out.append({"grade": grade_i, "class": cls_s, "number": num_s, "name": name_n})
         row += 1
 
     def _safe_int(x: str):
@@ -1122,14 +1039,9 @@ def read_freshmen_rows(
         except Exception:
             return (1, x)
 
-    out.sort(
-        key=lambda r: (
-            r["grade"],
-            _safe_int(r["class"]),
-            _safe_int(r["number"]),
-        )
-    )
+    out.sort(key=lambda r: (r["grade"], _safe_int(r["class"]), _safe_int(r["number"])))
     return out
+
 
 # 전입생 파일
 def read_transfer_rows(
@@ -1137,102 +1049,57 @@ def read_transfer_rows(
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
-    """
-    전입생 엑셀에서 학년/반/번호/이름만 읽어온다.
-    - ID는 전혀 사용하지 않는다 (슬롯도 두지 않음).
-    - 헤더 매핑은 TRANSFER_HEADER_SLOTS만 사용.
-    """
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
 
-    # 1) 헤더 행 탐지
+    # 1) 헤더 자동 감지
     if header_row is None:
         header_row = detect_header_row_transfer(ws)
 
-    # 2) 헤더 → 컬럼 매핑 (슬롯은 TRANSFER_HEADER_SLOTS에 정의된 것만 사용)
-    slot_cols = _build_header_slot_map(ws, header_row, TRANSFER_HEADER_SLOTS)
-
-    col_grade = slot_cols.get("grade")
-    col_class = slot_cols.get("class")
-    col_num   = slot_cols.get("num")   # 번호는 있으면 사용, 없어도 됨
-    col_name  = slot_cols.get("name")
-
-    missing = []
-    if col_grade is None:
-        missing.append("학년")
-    if col_class is None:
-        missing.append("반")
-    if col_name is None:
-        missing.append("이름")
-
-    # 번호는 필수 아님
-    if missing:
-        raise ValueError(
-            "[오류] 전입생 파일 헤더에서 "
-            + ", ".join(missing)
-            + " 열을 찾지 못했습니다. 헤더명을 확인해 주세요."
-        )
-
-    # 3) 데이터 시작 행
+    # 2) 예시/데이터 시작 행 자동 감지
     if data_start_row is None:
         _, data_start_row = detect_example_and_data_start(
             ws,
             header_row=header_row,
-            name_col=col_name,
+            name_col=5,  # E열: 성명
         )
 
-    out: List[Dict[str, Any]] = []
+    out = []
     row = data_start_row
 
     while True:
-        grade = ws.cell(row=row, column=col_grade).value
-        cls   = ws.cell(row=row, column=col_class).value
-        num   = ws.cell(row=row, column=col_num).value if col_num is not None else None
-        name  = ws.cell(row=row, column=col_name).value
+        grade = ws[f"B{row}"].value
+        cls   = ws[f"C{row}"].value
+        num   = ws[f"D{row}"].value
+        name  = ws[f"E{row}"].value
 
-        # 완전 빈 줄이면 종료 (학년/반/번호/이름 전부 비어 있으면)
-        if all(
-            v is None or str(v).strip() == ""
-            for v in [grade, cls, num, name]
-        ):
+        if all(v is None or str(v).strip() == "" for v in [grade, cls, num, name]):
             break
 
-        # 필수값 체크: 학년/반/이름만 필수
-        if any(
-            v is None or str(v).strip() == ""
-            for v in [grade, cls, name]
-        ):
-            raise ValueError(
-                f"[오류] 전입생 파일 {row}행에서 학년/반/이름 중 비어 있는 값이 있습니다."
-            )
+        # 필수: 학년·반·이름
+        if any(v is None or str(v).strip() == "" for v in [grade, cls, name]):
+            raise ValueError(f"[오류] 전입생 파일 {row}행에서 학년(B), 반(C), 성명(E)은 필수입니다.")
 
-        # 학년 숫자 추출
-        grade_s = str(grade).strip()
-        m = re.search(r"\d+", grade_s)
-        if not m:
-            raise ValueError(
-                f"[오류] 전입생 파일 {row}행 학년에서 숫자를 찾지 못했습니다: {grade_s!r}"
-            )
-        grade_i = int(m.group(0))
-
+        grade_i = int(str(grade).strip())
         cls_s = str(cls).strip()
         num_s = "" if (num is None or str(num).strip() == "") else str(num).strip()
         name_n = normalize_name(name)
+        if not name_n:
+            raise ValueError(f"[오류] 전입생 파일 {row}행 성명(E) 정규화 결과가 비어 있습니다.")
 
-        out.append(
-            {
-                "grade": grade_i,
-                "class": cls_s,
-                "number": num_s,
-                "name": name_n,
-                # ⚠️ ID는 전입에서 절대 쓰지 않는다 -> 키 자체를 만들지 않음
-            }
-        )
+        out.append({"grade": grade_i, "class": cls_s, "number": num_s, "name": name_n})
         row += 1
 
-    # 필요하면 여기서 grade / class / number 기준 정렬 가능
+    def _safe_int(x: str):
+        try:
+            return (0, int(x))
+        except Exception:
+            return (1, x)
+
+    out.sort(key=lambda r: (r["grade"], _safe_int(r["class"]), _safe_int(r["number"])))
     return out
+
 
 # 교사 아이디 파일
 def read_teacher_rows(
@@ -1240,10 +1107,6 @@ def read_teacher_rows(
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
-    """
-    교사 파일 읽기.
-    헤더 이름을 기준으로 직위/이름/학습용ID신청/관리용ID신청 컬럼을 찾는다.
-    """
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
@@ -1252,67 +1115,40 @@ def read_teacher_rows(
     if header_row is None:
         header_row = detect_header_row_teacher(ws)
 
-    # 2) 헤더 → 컬럼 매핑
-    slot_cols = _build_header_slot_map(ws, header_row, TEACHER_HEADER_SLOTS)
-    col_pos   = slot_cols.get("position")  # 직위/담당 (없어도 됨)
-    col_name  = slot_cols.get("name")      # 이름 (필수)
-    col_learn = slot_cols.get("learn")     # 학습용 ID 신청 (없으면 False)
-    col_admin = slot_cols.get("admin")     # 관리용 ID 신청 (없으면 False)
-
-    if col_name is None:
-        raise ValueError(
-            "[오류] 교사 파일 헤더에서 이름 열을 찾지 못했습니다. '성명' 또는 '이름' 헤더를 확인해 주세요."
-        )
-
-    # 3) 예시/데이터 시작 행 자동 감지
+    # 2) 예시/데이터 시작 행 자동 감지
     if data_start_row is None:
         _, data_start_row = detect_example_and_data_start(
             ws,
             header_row=header_row,
-            name_col=col_name,
+            name_col=3,  # C열: 선생님 이름
         )
 
-    out: List[Dict[str, Any]] = []
+    out = []
     row = data_start_row
     while True:
-        # 현재 행 값들 읽기
-        def _get(col_idx: Optional[int]):
-            if col_idx is None:
-                return None
-            return ws.cell(row=row, column=col_idx).value
+        b = ws[f"B{row}"].value  # 직위/담당
+        c = ws[f"C{row}"].value  # 이름
+        d = ws[f"D{row}"].value  # 학습용 ID 신청
+        e = ws[f"E{row}"].value  # 관리용 ID 신청
 
-        pos    = _get(col_pos)
-        name   = _get(col_name)
-        v_learn = _get(col_learn)
-        v_admin = _get(col_admin)
-
-        # 완전 빈 줄이면 종료
-        if all(
-            v is None or str(v).strip() == ""
-            for v in [pos, name, v_learn, v_admin]
-        ):
+        if all(v is None or str(v).strip() == "" for v in [b, c, d, e]):
             break
 
-        # 이름 없으면 그 행은 건너뜀
-        if name is None or str(name).strip() == "":
+        if c is None or str(c).strip() == "":
             row += 1
             continue
 
-        name_n = normalize_name(name)
+        name_n = normalize_name(c)
         if not name_n:
             row += 1
             continue
 
-        learn_apply = False
-        admin_apply = False
-        if col_learn is not None:
-            learn_apply = not (v_learn is None or str(v_learn).strip() == "")
-        if col_admin is not None:
-            admin_apply = not (v_admin is None or str(v_admin).strip() == "")
+        learn_apply = not (d is None or str(d).strip() == "")
+        admin_apply = not (e is None or str(e).strip() == "")
 
         out.append(
             {
-                "position": "" if pos is None else str(pos).strip(),
+                "position": "" if b is None else str(b).strip(),
                 "name": name_n,
                 "learn_apply": learn_apply,
                 "admin_apply": admin_apply,
@@ -1329,10 +1165,6 @@ def read_withdraw_rows(
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
-    """
-    전출생 파일 읽기.
-    헤더 이름을 기준으로 학년/반/이름 컬럼을 찾는다.
-    """
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
@@ -1341,72 +1173,35 @@ def read_withdraw_rows(
     if header_row is None:
         header_row = detect_header_row_withdraw(ws)
 
-    # 2) 헤더 → 컬럼 매핑
-    slot_cols = _build_header_slot_map(ws, header_row, WITHDRAW_HEADER_SLOTS)
-    col_grade = slot_cols.get("grade")
-    col_class = slot_cols.get("class")
-    col_name  = slot_cols.get("name")
-
-    missing = []
-    if col_grade is None:
-        missing.append("학년")
-    if col_class is None:
-        missing.append("반")
-    if col_name is None:
-        missing.append("성명/이름")
-
-    if missing:
-        raise ValueError(
-            "[오류] 전출생 파일 헤더에서 "
-            + ", ".join(missing)
-            + " 열을 찾지 못했습니다. 헤더명을 확인해 주세요."
-        )
-
-    # 3) 예시/데이터 시작 행 자동 감지
+    # 2) 예시/데이터 시작 행 자동 감지
     if data_start_row is None:
         _, data_start_row = detect_example_and_data_start(
             ws,
             header_row=header_row,
-            name_col=col_name,
+            name_col=4,  # D열: 성명
         )
 
-    out: List[Dict[str, Any]] = []
+    out = []
     row = data_start_row
     while True:
-        grade = ws.cell(row=row, column=col_grade).value
-        cls   = ws.cell(row=row, column=col_class).value
-        name  = ws.cell(row=row, column=col_name).value
+        grade = ws[f"B{row}"].value
+        cls   = ws[f"C{row}"].value
+        name  = ws[f"D{row}"].value
 
         vals = [grade, cls, name]
-        # 완전 빈 줄이면 종료
         if all(v is None or str(v).strip() == "" for v in vals):
             break
-        # 일부만 비어 있으면 오류
         if any(v is None or str(v).strip() == "" for v in vals):
-            raise ValueError(
-                f"[오류] 전출생 파일 {row}행에 학년/반/이름 중 비어 있는 값이 있습니다."
-            )
+            raise ValueError(f"[오류] 전출생 파일 {row}행(B~D)에 빈 값이 있습니다.")
 
-        # 학년에서 숫자만 추출 (1, 2학년, "3" 다 커버)
-        grade_s = str(grade).strip()
-        m = re.search(r"\d+", grade_s)
-        if not m:
-            raise ValueError(
-                f"[오류] 전출생 파일 {row}행 학년에서 숫자를 찾지 못했습니다: {grade_s!r}"
-            )
-        grade_i = int(m.group(0))
-
+        grade_i = int(str(grade).strip())
         cls_s = normalize_withdraw_class(cls, grade_i)
         if not cls_s:
-            raise ValueError(
-                f"[오류] 전출생 파일 {row}행 반 정규화 결과가 비어 있습니다."
-            )
+            raise ValueError(f"[오류] 전출생 파일 {row}행 반(C) 정규화 결과가 비어 있습니다.")
 
         name_n = normalize_name(name)
         if not name_n:
-            raise ValueError(
-                f"[오류] 전출생 파일 {row}행 이름 정규화 결과가 비어 있습니다."
-            )
+            raise ValueError(f"[오류] 전출생 파일 {row}행 성명(D) 정규화 결과가 비어 있습니다.")
 
         out.append({"grade": grade_i, "class": cls_s, "name": name_n})
         row += 1
@@ -1749,9 +1544,6 @@ def build_transfer_ids(
         suffix = dedup_suffix_letters(add_seq) if need_suffix else ""
 
         uid = f"{pref}{nm}{suffix}"
-
-        is_dup_with_roster = base_cnt > 0  # 🔸 명부 기준 동명이인 여부
-
         done.append({**tr, "id": uid})
 
     def _safe_int(x: str):
@@ -2445,8 +2237,6 @@ def build_notice_student_sheet(
     ws_notice,
     register_students_ws,
     transfer_ids: set,
-    transfer_dup_ids: set,   # 🔸 추가
-
 ):
     """
     안내파일 - 학생 ID,PW(학습용)
@@ -2454,13 +2244,10 @@ def build_notice_student_sheet(
     데이터 4행부터
     """
     hm_r = header_map(register_students_ws, 1)
-
-    # 🔹 필수 헤더: 예전처럼 No 포함
     need_r = ["No", "학생이름", "ID", "수강반"]
     for k in need_r:
         if k not in hm_r:
             raise ValueError(f"[오류] 등록작업파일 [학생자료]에 '{k}' 헤더가 없습니다.")
-
     c_r_name = hm_r["학생이름"]
     c_r_id   = hm_r["ID"]
     c_r_cls  = hm_r["수강반"]
@@ -2469,18 +2256,18 @@ def build_notice_student_sheet(
     header_row = 3
     start_row = 4
 
-    # 0) 기존 데이터 '값'만 지우기 (그대로 유지)
+    # 0) 기존 데이터 '값'만 지우기 (서식은 유지)
     max_row = ws_notice.max_row
     if max_row >= start_row:
+        # No~PW 열 범위: 1~6 열 기준
         for r in range(start_row, max_row + 1):
-            for c in range(1, 7):  # No~PW
+            for c in range(1, 7):
                 ws_notice.cell(row=r, column=c).value = None
 
-    # 1) 1차 패스: 안내에 들어갈 학생 목록 + (학년, 이름키) 카운트
+    # 1) 1차 패스: 안내에 들어갈 학생 목록 + (학년, 이름키) 카운트 만들기
     tmp_rows: List[Dict[str, Any]] = []
     name_counter: Counter[tuple] = Counter()
 
-    # 🔵 last_r를 다시 No 기준으로
     last_r = find_last_data_row(register_students_ws, key_col=c_r_no, start_row=2)
     for r in range(2, last_r + 1):
         nm  = register_students_ws.cell(r, c_r_name).value
@@ -2488,9 +2275,11 @@ def build_notice_student_sheet(
         cls = register_students_ws.cell(r, c_r_cls).value
 
         cls_str = "" if cls is None else str(cls).strip()
+        # 선생님반은 학생 안내에서 제외
         if cls_str == "선생님반":
             continue
 
+        # 이름/ID가 전부 빈 줄은 스킵
         if (nm is None or str(nm).strip() == "") and (uid is None or str(uid).strip() == ""):
             continue
 
@@ -2506,10 +2295,11 @@ def build_notice_student_sheet(
             cls_disp = cls_str
         else:
             g_disp = grade
-            cls_disp = cls_only
+            cls_disp = cls_only  # "1-3"에서 반만 뽑은 값 (문자열)
 
+        # 동명이인 판정용 키 (학년 + 이름키)
         name_key = notice_name_key(nm_s)
-        key = (grade, name_key)
+        key = (grade, name_key)  # grade가 None인 경우도 그냥 담아둔다
 
         tmp_rows.append(
             {
@@ -2519,10 +2309,10 @@ def build_notice_student_sheet(
                 "id": uid_s,
                 "key": key,
                 "is_transfer": uid_s in transfer_ids,
-                "is_transfer_dup_with_roster": uid_s in transfer_dup_ids,  # 🔸 추가
             }
         )
 
+        # 학년이 있고, 이름키도 있을 때만 카운트 (학년 모호하면 그냥 색칠 안 함)
         if grade is not None and name_key:
             name_counter[key] += 1
 
@@ -2532,14 +2322,9 @@ def build_notice_student_sheet(
 
     for rec in tmp_rows:
         key = rec["key"]
-        # 1) 기본: 등록파일 내부 (학년, 이름키) 카운트로 동명이인 판정
         dup_flag = name_counter.get(key, 0) >= 2
 
-        # 2) 전입생이고, 명부 기준 동명이인으로 판정된 경우 → 무조건 동명이인 처리
-        if rec["is_transfer"] and rec.get("is_transfer_dup_with_roster"):
-            dup_flag = True
-
-        # 3) A~F 열 전체를 텍스트로 쓰면서 셀 객체 확보
+        # A~F 열 전체를 텍스트로 쓰면서 셀 객체 확보
         cell_no    = write_text_cell(ws_notice, cur_row, 1, running_no)        # No.
         cell_grade = write_text_cell(ws_notice, cur_row, 2, rec["grade"])      # 학년
         cell_class = write_text_cell(ws_notice, cur_row, 3, rec["class_disp"]) # 반
@@ -2547,17 +2332,17 @@ def build_notice_student_sheet(
         cell_id    = write_text_cell(ws_notice, cur_row, 5, rec["id"])         # ID
 
         # PW 컬럼(6열)이 있으면 필요 시 값 넣기 (없으면 None / 빈값)
-        cell_pw    = write_text_cell(ws_notice, cur_row, 6, "1234")
+        cell_pw    = ws_notice.cell(cur_row, 6)
 
         # 이 행에서 색칠할 대상 셀 전체 (A~F)
         row_cells = [cell_no, cell_grade, cell_class, cell_name, cell_id, cell_pw]
 
-        # 4) 전입생: 행 전체 주황
+        # 전입생: 행 전체 주황
         if rec["is_transfer"]:
             for cell in row_cells:
                 cell.fill = FILL_TRANSFER
 
-        # 5) 동명이인: 행 전체 노랑 (전입+동명이인이면 노랑으로 덮어씀)
+        # 동명이인: 행 전체 노랑 (전입+동명이인이면 노랑으로 덮어씀)
         if dup_flag:
             for cell in row_cells:
                 cell.fill = FILL_DUP
@@ -2569,15 +2354,13 @@ def build_notice_student_sheet(
 def build_notice_teacher_sheet(
     ws_notice,
     teacher_rows: List[Dict],
-    learn_ids: Optional[List[str]] = None,
-    admin_ids: Optional[List[str]] = None,
 ):
     """
     안내파일 - 선생님ID,PW(관리용,학습용)
     헤더 3행, 데이터 4행부터.
     - No, 직위, 선생님이름: teacher_rows의 position/name 그대로
-    - 관리용ID: 등록파일 [직원정보]에서 가져온 ID (fallback: name)
-    - 학습용ID: 등록파일 [학생자료] 선생님반에서 가져온 ID (fallback: name+'1')
+    - 관리용ID: admin_apply True → name, PW는 t1234
+    - 학습용ID: learn_apply True → name+'1', PW는 1234
     - 신청 안 한 칸은 회색 처리
     """
     header_row = 3
@@ -2587,21 +2370,8 @@ def build_notice_teacher_sheet(
     try:
         ws_notice.column_dimensions["B"].width = 16.6
     except Exception:
+        # 열 정보가 없거나 시트 구조가 다른 경우에도 전체 로직은 계속 진행
         pass
-
-    # 전체 교사 중 신청자 수
-    admin_total = sum(1 for t in teacher_rows if t.get("admin_apply"))
-    learn_total = sum(1 for t in teacher_rows if t.get("learn_apply"))
-
-    admin_ids_list = admin_ids or []
-    learn_ids_list = learn_ids or []
-
-    # 등록파일에서 가져온 ID 길이가 신청자 수와 맞으면 그대로 사용
-    use_admin_from_reg = admin_total > 0 and len(admin_ids_list) >= admin_total
-    use_learn_from_reg = learn_total > 0 and len(learn_ids_list) >= learn_total
-
-    idx_admin = 0
-    idx_learn = 0
 
     r_out = start_row
     no = 1
@@ -2614,24 +2384,10 @@ def build_notice_teacher_sheet(
         admin_apply = bool(t.get("admin_apply"))
         learn_apply = bool(t.get("learn_apply"))
 
-        # ----- 관리용 ID: 등록파일 우선 -----
-        admin_id = ""
-        if admin_apply:
-            if use_admin_from_reg:
-                admin_id = admin_ids_list[idx_admin]
-            else:
-                admin_id = nm  # fallback: 예전 방식
-            idx_admin += 1
+        admin_id = nm if admin_apply else ""
         admin_pw = "t1234" if admin_id else ""
 
-        # ----- 학습용 ID: 등록파일 우선 -----
-        learn_id = ""
-        if learn_apply:
-            if use_learn_from_reg:
-                learn_id = learn_ids_list[idx_learn]
-            else:
-                learn_id = f"{nm}1"  # fallback: 예전 방식
-            idx_learn += 1
+        learn_id = f"{nm}1" if learn_apply else ""
         learn_pw = "1234" if learn_id else ""
 
         # A: No. / B: 직위 / C: 선생님이름 / D: 구분용 빈 칸
@@ -2696,88 +2452,166 @@ def build_notice_file(
             f"- keywords: {keywords}\n"
             f"- sheetnames: {wb.sheetnames}"
         )
-    
+
     sh_student = _pick_sheet_by_keywords(wb_notice, ["학생", "PW", "학습용"])
     sh_teacher = _pick_sheet_by_keywords(wb_notice, ["선생님", "PW"])
 
     ws_notice_students = wb_notice[sh_student]
     ws_notice_teachers = wb_notice[sh_teacher]
 
-    # 1) 등록작업파일 학생자료 시트
-    ws_reg_students = wb_reg["학생자료"]
-
-    # 1-1) 전입 완료 학생 ID set (학생 안내 시트 색칠용)
-    transfer_ids: set[str] = set()
-    transfer_dup_ids: set[str] = set()   # 🔸 명부 기준 동명이인 전입 ID만
-
+    transfer_ids = set()
     for tr in transfer_done_rows:
         uid = tr.get("id")
-        if not uid:
-            continue
-        uid_s = str(uid).strip()
-        transfer_ids.add(uid_s)
+        if uid:
+            transfer_ids.add(str(uid).strip())
 
-        if tr.get("dup_with_roster"):    # 1단계에서 붙인 플래그
-            transfer_dup_ids.add(uid_s)
-
-    # 1-2) 학생 안내 시트 생성
+    # 1) 학생 안내 시트: 기존 그대로
     build_notice_student_sheet(
         ws_notice=ws_notice_students,
         register_students_ws=ws_reg_students,
         transfer_ids=transfer_ids,
-        transfer_dup_ids=transfer_dup_ids,  # 🔸 추가
-
     )
 
-    # --- 등록작업파일에서 실제 ID 가져오기 (교사 안내용) ---
-
-    # 2) 학생자료 시트에서 선생님반 학습용 ID
-    learn_ids_from_register: Optional[List[str]] = None
+    # 2) 교사 안내 시트: 등록파일에서 ID를 먼저 추출
+    # 2-1) 학습용 ID: [학생자료] 중 수강반 == "선생님반"
+    learn_ids_from_register: List[str] | None = None
     try:
-        hm_r = header_map(ws_reg_students, 1)
-        col_r_class = hm_r["수강반"]
-        col_r_id    = hm_r["ID"]
-        tmp_learn: List[str] = []
-        max_row = ws_reg_students.max_row or 1
-        for row in range(2, max_row + 1):
-            cls_val = ws_reg_students.cell(row=row, column=col_r_class).value
-            id_val  = ws_reg_students.cell(row=row, column=col_r_id).value
-            if cls_val is None and id_val is None:
-                continue
-            if str(cls_val).strip() == "선생님반" and id_val:
-                tmp_learn.append(str(id_val).strip())
-        if tmp_learn:
-            learn_ids_from_register = tmp_learn
+        hm_reg = header_map(ws_reg_students, 1)
+        col_r_class = hm_reg.get("수강반")
+        col_r_id    = hm_reg.get("ID")
+        if col_r_class and col_r_id:
+            tmp_list: List[str] = []
+            max_row = ws_reg_students.max_row or 1
+            for row in range(2, max_row + 1):
+                cls_val = ws_reg_students.cell(row=row, column=col_r_class).value
+                id_val  = ws_reg_students.cell(row=row, column=col_r_id).value
+                if cls_val is None and id_val is None:
+                    continue
+                if str(cls_val).strip() == "선생님반" and id_val:
+                    tmp_list.append(str(id_val).strip())
+            if tmp_list:
+                learn_ids_from_register = tmp_list
     except Exception:
         learn_ids_from_register = None
 
-    # 3) 직원정보 시트에서 관리용 ID
-    admin_ids_from_register: Optional[List[str]] = None
+    # 2-2) 관리용 ID: [직원정보] 시트의 아이디 컬럼
+    admin_ids_from_register: List[str] | None = None
     try:
-        if "직원정보" in wb_reg.sheetnames:
-            ws_reg_staff = wb_reg["직원정보"]
-            hm_s = header_map(ws_reg_staff, 1)
-            col_s_id = hm_s["아이디"]
-            tmp_admin: List[str] = []
+        ws_reg_staff = wb_reg["직원정보"]
+        hm_staff = header_map(ws_reg_staff, 1)
+        col_s_id = hm_staff.get("아이디")
+        if col_s_id:
+            tmp_list: List[str] = []
             max_row = ws_reg_staff.max_row or 1
             for row in range(2, max_row + 1):
                 id_val = ws_reg_staff.cell(row=row, column=col_s_id).value
                 if not id_val:
                     continue
-                tmp_admin.append(str(id_val).strip())
-            if tmp_admin:
-                admin_ids_from_register = tmp_admin
+                tmp_list.append(str(id_val).strip())
+            if tmp_list:
+                admin_ids_from_register = tmp_list
     except Exception:
         admin_ids_from_register = None
 
-    # 4) 교사 안내 시트 생성
+    # 2-3) 교사 원본 행 + 등록파일에서 뽑은 ID를 합쳐서 안내 시트 생성
+    teacher_rows = read_teacher_rows(teacher_file_path) if teacher_file_path else []
+   
+    def build_notice_teacher_sheet(
+        ws_notice,
+        teacher_rows: List[Dict],
+        learn_ids: Optional[List[str]] = None,
+        admin_ids: Optional[List[str]] = None,
+    ):
+        """
+        안내파일 - 선생님ID,PW(관리용,학습용)
+        헤더 3행, 데이터 4행부터.
+        - No, 직위, 선생님이름: teacher_rows의 position/name 그대로
+        - 관리용ID: 등록파일 [직원정보]에서 가져온 ID (fallback: name)
+        - 학습용ID: 등록파일 [학생자료] 선생님반에서 가져온 ID (fallback: name+'1')
+        - 신청 안 한 칸은 회색 처리
+        """
+        header_row = 3
+        start_row = 4
+
+        # 직위(B열) 컬럼 폭 확장 (긴 직위/담당 명칭 잘리지 않도록)
+        try:
+            ws_notice.column_dimensions["B"].width = 16.6
+        except Exception:
+            pass
+
+        # 전체 교사 중 신청자 수 파악
+        admin_total = sum(1 for t in teacher_rows if t.get("admin_apply"))
+        learn_total = sum(1 for t in teacher_rows if t.get("learn_apply"))
+
+        admin_ids_list = admin_ids or []
+        learn_ids_list = learn_ids or []
+
+        use_admin_from_reg = admin_total > 0 and len(admin_ids_list) >= admin_total
+        use_learn_from_reg = learn_total > 0 and len(learn_ids_list) >= learn_total
+
+        idx_admin = 0
+        idx_learn = 0
+
+        r_out = start_row
+        no = 1
+        for t in teacher_rows:
+            pos = "" if t.get("position") is None else str(t.get("position")).strip()
+            nm  = "" if t.get("name") is None else str(t.get("name")).strip()
+            if not nm and not pos and (not t.get("learn_apply")) and (not t.get("admin_apply")):
+                continue
+
+            admin_apply = bool(t.get("admin_apply"))
+            learn_apply = bool(t.get("learn_apply"))
+
+            # ----- 관리용 ID: 등록파일 우선 -----
+            admin_id = ""
+            if admin_apply:
+                if use_admin_from_reg:
+                    admin_id = admin_ids_list[idx_admin]
+                else:
+                    admin_id = nm  # 기존 규칙 fallback
+                idx_admin += 1
+            admin_pw = "t1234" if admin_id else ""
+
+            # ----- 학습용 ID: 등록파일 우선 -----
+            learn_id = ""
+            if learn_apply:
+                if use_learn_from_reg:
+                    learn_id = learn_ids_list[idx_learn]
+                else:
+                    learn_id = f"{nm}1"  # 기존 규칙 fallback
+                idx_learn += 1
+            learn_pw = "1234" if learn_id else ""
+
+            # A: No. / B: 직위 / C: 선생님이름 / D: 구분용 빈 칸
+            # E: 관리용 ID / F: PW / G: 구분용 빈 칸 / H: 학습용 ID / I: PW
+            write_text_cell(ws_notice, r_out, 1, no)
+            write_text_cell(ws_notice, r_out, 2, pos)
+            write_text_cell(ws_notice, r_out, 3, nm)
+            write_text_cell(ws_notice, r_out, 5, admin_id)
+            write_text_cell(ws_notice, r_out, 6, admin_pw)
+            write_text_cell(ws_notice, r_out, 8, learn_id)
+            write_text_cell(ws_notice, r_out, 9, learn_pw)
+
+            # 회색 처리(신청 안 한 영역)
+            if not admin_apply:
+                for c in [5, 6]:
+                    ws_notice.cell(r_out, c).fill = FILL_GREY
+
+            if not learn_apply:
+                for c in [8, 9]:
+                    ws_notice.cell(r_out, c).fill = FILL_GREY
+
+            no += 1
+            r_out += 1
+
+        delete_rows_below(ws_notice, r_out - 1)
+
     teacher_rows = read_teacher_rows(teacher_file_path) if teacher_file_path else []
     build_notice_teacher_sheet(
         ws_notice=ws_notice_teachers,
         teacher_rows=teacher_rows,
-        learn_ids=learn_ids_from_register,
-        admin_ids=admin_ids_from_register,
-)
+    )
 
     out_notice_path.parent.mkdir(parents=True, exist_ok=True)
     backup_if_exists(out_notice_path)

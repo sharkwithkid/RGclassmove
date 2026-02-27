@@ -19,9 +19,6 @@ from pyxlsb import open_workbook as open_xlsb_workbook
 from core.utils import normalize_text, text_contains, text_eq
 
 
-# =========================
-# Result types
-# =========================
 @dataclass
 class PipelineResult:
     ok: bool
@@ -74,100 +71,11 @@ class ScanResult:
     can_execute_after_input: bool = False
 
 
-# =========================
-# Input keyword sets
-# =========================
 FRESHMEN_KEYWORDS = ["신입생", "신입"]
 TEACHER_KEYWORDS  = ["교사", "교원"]
 TRANSFER_KEYWORDS = ["전입생", "전입"]
 WITHDRAW_KEYWORDS = ["전출생", "전출"]
 
-
-# =========================
-# Paths
-# =========================
-def get_project_dirs(work_root: Path) -> Dict[str, Path]:
-    """
-    작업 폴더(work_root) 구조:
-
-    work_root/
-      ├─ ●resources/  (또는 이름에 'resources' 포함된 아무 폴더 1개)
-      │    ├─ DB/
-      │    ├─ templates/
-      │    └─ notices/
-      ├─ A초등학교/
-      ├─ B중학교/
-      └─ ...
-    """
-    work_root = work_root.resolve()
-
-    # 이름에 'resources' 가 들어간 폴더들을 모두 수집
-    candidates = [
-        p for p in work_root.iterdir()
-        if p.is_dir() and "resources" in p.name.lower()
-    ]
-
-    if len(candidates) == 0:
-        # 아무것도 없으면 기본값: work_root/resources
-        resources_root = work_root / "resources"
-    elif len(candidates) == 1:
-        resources_root = candidates[0]
-    else:
-        # 여러 개면 애매하니까 바로 에러
-        names = [p.name for p in candidates]
-        raise ValueError(
-            f"[오류] 작업 폴더 내에 'resources'를 포함한 폴더가 여러 개 있습니다: {names}"
-        )
-
-    return {
-        "WORK_ROOT": work_root,
-        "RESOURCES_ROOT": resources_root,
-        "DB": resources_root / "DB",
-        "TEMPLATES": resources_root / "templates",
-        "NOTICES": resources_root / "notices",
-        "SCHOOL_ROOT": work_root,  # 학교 폴더는 work_root 바로 아래
-    }
-
-
-# =========================
-# File helpers
-# =========================
-
-def find_templates(format_dir: Path) -> Tuple[Optional[Path], Optional[Path], List[str]]:
-    """
-    [templates] 폴더 템플릿 2개 식별:
-    - 등록 템플릿: 파일명에 '등록' 포함
-    - 안내 템플릿: 파일명에 '안내' 포함
-    """
-    format_dir = Path(format_dir).resolve()
-    if not format_dir.exists():
-        return None, None, [f"[오류] [templates] 폴더를 찾을 수 없습니다: {format_dir}"]
-
-    xlsx_files = [
-        p for p in format_dir.iterdir()
-        if p.is_file() and p.suffix.lower() == ".xlsx" and not p.name.startswith("~$")
-    ]
-    if not xlsx_files:
-        return None, None, [f"[오류] [templates] 폴더에 .xlsx 파일이 없습니다: {format_dir}"]
-
-    reg = [p for p in xlsx_files if "등록" in p.stem]
-    notice = [p for p in xlsx_files if "안내" in p.stem]
-
-    errors: List[str] = []
-    if len(reg) == 0:
-        errors.append("[오류] [templates] 폴더에서 '등록' 템플릿을 찾지 못했습니다. (파일명에 '등록' 포함)")
-    elif len(reg) > 1:
-        errors.append("[오류] [templates] 폴더에 '등록' 템플릿이 여러 개입니다.")
-
-    if len(notice) == 0:
-        errors.append("[오류] [templates] 폴더에서 '안내' 템플릿을 찾지 못했습니다. (파일명에 '안내' 포함)")
-    elif len(notice) > 1:
-        errors.append("[오류] [templates] 폴더에 '안내' 템플릿이 여러 개입니다.")
-
-    if errors:
-        return None, None, errors
-
-    return reg[0], notice[0], []
 
 
 NOTICE_ORDER = [
@@ -182,155 +90,62 @@ NOTICE_ORDER = [
 ]
 
 
-def scan_work_root(work_root: Path) -> Dict[str, Any]:
-    """
-    작업 루트에서 resources/DB, resources/templates, resources/notices, 학교 폴더 상태를 점검한다.
-    app.py는 여기서 다음 키들을 기대하고 있음:
+HANGUL_RE = re.compile(r"[가-힣]")
+EN_RE = re.compile(r"[A-Za-z]")
 
-      - ok: bool
-      - errors: List[str]
-      - message: str
-      - school_folders: List[str]
-      - notice_titles: List[str]
 
-      - db_ok: bool
-      - errors_db: List[str]
-      - db_file: Optional[Path]
+# 슬롯별 헤더 키워드 (느슨한 매칭)
+FRESHMEN_HEADER_SLOTS = {
+    "no":    ["no", "번호"],
+    "grade": ["학년"],
+    "class": ["반", "학급"],
+    "num":   ["번호", "번"],
+    "name":  ["성명", "이름", "학생이름"],
+}
 
-      - format_ok: bool
-      - errors_format: List[str]
-      - register_template: Optional[Path]
-      - notice_template: Optional[Path]
-    """
-    work_root = work_root.resolve()
-    dirs = get_project_dirs(work_root)
+TRANSFER_HEADER_SLOTS = {
+    "no":    ["no", "번호"],
+    "grade": ["학년"],
+    "class": ["반", "학급"],
+    "number":["번호", "번", "출석번호"],
+    "name":  ["성명", "이름"],
+    "remark":["비고", "메모", "특이사항"],
+}
 
-    # 전체 에러
-    errors: List[str] = []
+WITHDRAW_HEADER_SLOTS = {
+    "no":    ["no", "번호"],
+    "grade": ["학년"],
+    "class": ["반", "학급"],
+    "name":  ["성명", "이름"],
+    "remark":["비고", "메모", "특이사항"],
+}
 
-    # -------------------------
-    # 0. resources 루트
-    # -------------------------
-    res_root = dirs["RESOURCES_ROOT"].resolve()
+TEACHER_HEADER_SLOTS = {
+    "no":      ["no", "번호"],
+    "position":["직위", "담당", "직위담당"],
+    "name":    ["성명", "이름", "선생님이름", "교사명", "교원명"],
+    "learn":   ["학습용id신청", "학습용id", "학습용", "학습용아이디"],
+    "admin":   ["관리용id신청", "관리용id", "관리용", "관리용아이디"],
+}
 
-    # 학교 폴더 목록 (resources 폴더 제외)
-    school_folders = [
-        p.name
-        for p in work_root.iterdir()
-        if p.is_dir()
-        and p.resolve() != res_root
-        and not p.name.startswith(".")
-    ]
-    school_folders.sort()
 
-    # -------------------------
-    # 1. DB 폴더 점검
-    # -------------------------
-    db_ok = False
-    errors_db: List[str] = []
-    db_file: Optional[Path] = None
+EXAMPLE_NAMES_RAW = ["홍길동", "이순신", "유관순", "임꺽정"]
+EXAMPLE_NAMES_NORM = {normalize_text(n) for n in EXAMPLE_NAMES_RAW}
+EXAMPLE_KEYWORDS = ["예시"]  # 행 안 어느 셀이라도 '예시' 포함되면 예시로 처리
 
-    db_dir = dirs["DB"]
-    if not db_dir.exists():
-        errors_db.append("[오류] resources/DB 폴더가 없습니다.")
-    else:
-        db_files = [
-            p for p in db_dir.glob("*.xlsb")
-            if "학교전체명단" in p.stem and not p.name.startswith("~$")
-        ]
-        if len(db_files) == 0:
-            errors_db.append("[오류] DB 폴더에 '학교전체명단' xlsb 파일이 없습니다.")
-        elif len(db_files) > 1:
-            errors_db.append("[오류] DB 폴더에 '학교전체명단' xlsb 파일이 2개 이상입니다.")
-        else:
-            db_ok = True
-            db_file = db_files[0]
 
-    # -------------------------
-    # 2. templates(양식) 폴더 점검
-    # -------------------------
-    format_ok = False
-    errors_format: List[str] = []
-    register_template: Optional[Path] = None
-    notice_template: Optional[Path] = None
+FILL_TRANSFER = PatternFill("solid", fgColor="F8CBAD")  # 옅은 주황
+FILL_DUP      = PatternFill("solid", fgColor="FFFF00")  # 노랑
+FILL_GREY     = PatternFill("solid", fgColor="D9D9D9")  # 회색
 
-    tpl_dir = dirs["TEMPLATES"]
-    if not tpl_dir.exists():
-        errors_format.append("[오류] resources/templates 폴더가 없습니다.")
-    else:
-        reg_files = [
-            p for p in tpl_dir.glob("*.xlsx")
-            if "등록" in p.stem and not p.name.startswith("~$")
-        ]
-        notice_files = [
-            p for p in tpl_dir.glob("*.xlsx")
-            if "안내" in p.stem and not p.name.startswith("~$")
-        ]
 
-        if len(reg_files) != 1:
-            errors_format.append("templates 폴더에 '등록' 템플릿 파일이 정확히 1개 있어야 합니다.")
-        else:
-            register_template = reg_files[0]
 
-        if len(notice_files) != 1:
-            errors_format.append("templates 폴더에 '안내' 템플릿 파일이 정확히 1개 있어야 합니다.")
-        else:
-            notice_template = notice_files[0]
 
-        if not errors_format:
-            format_ok = True
-
-    # -------------------------
-    # 3. notices 폴더 점검
-    # -------------------------
-    notice_dir = dirs["NOTICES"]
-    notice_titles: List[str] = []
-
-    if not notice_dir.exists():
-        errors.append("[오류] resources/notices 폴더가 없습니다.")
-    else:
-        txt_files = [p for p in notice_dir.glob("*.txt") if p.is_file()]
-        if not txt_files:
-            errors.append("[오류] notices 폴더에 .txt 파일이 없습니다.")
-        else:
-            notice_titles = sorted({p.stem.strip() for p in txt_files})
-
-    # -------------------------
-    # 4. 전체 에러 합치기
-    # -------------------------
-    errors.extend(errors_db)
-    errors.extend(errors_format)
-
-    ok = len(errors) == 0
-    message = (
-        "[OK] resources(DB/templates/notices)가 정상적으로 준비되었습니다."
-        if ok else ""
-    )
-
-    return {
-        "ok": ok,
-        "errors": errors,
-        "message": message,
-        "school_folders": school_folders,
-        "notice_titles": notice_titles,
-
-        # DB 상태 (app.py에서 사용)
-        "db_ok": db_ok,
-        "errors_db": errors_db,
-        "db_file": db_file,
-
-        # 양식 상태 (app.py에서 사용)
-        "format_ok": format_ok,
-        "errors_format": errors_format,
-        "register_template": register_template,
-        "notice_template": notice_template,
-    }
-
+# ========== L0: infra / excel utils ==========
 
 def ensure_xlsx_only(p: Path) -> None:
     if p.suffix.lower() != ".xlsx":
         raise ValueError(f"[오류] 파일 형식이 .xlsx가 아닙니다: {p.name}")
-
 
 def backup_if_exists(out_path: Path) -> Optional[Path]:
     """기존 파일이 있으면 작업/_backup으로 이동."""
@@ -344,196 +159,6 @@ def backup_if_exists(out_path: Path) -> Optional[Path]:
     out_path.replace(dest)
     return dest
 
-
-def find_single_input_file(input_dir: Path, keywords: Sequence[str]) -> Optional[Path]:
-    if not input_dir.exists():
-        return None
-
-    kw_list: List[str] = []
-    for k in keywords:
-        k = "" if k is None else str(k).strip()
-        if k:
-            kw_list.append(k)
-
-    if not kw_list:
-        return None
-
-    candidates: List[Path] = []
-    for p in input_dir.iterdir():
-        if not (p.is_file() and p.suffix.lower() == ".xlsx"):
-            continue
-        if p.name.startswith("~$"):
-            continue
-        if any(text_contains(p.name, kw) for kw in kw_list):
-            candidates.append(p)
-
-    if len(candidates) == 0:
-        return None
-    if len(candidates) > 1:
-        raise ValueError(f"[오류] {kw_list} 포함 .xlsx 파일이 2개 이상: {[c.name for c in candidates]}")
-    return candidates[0]
-
-
-def choose_template_register(format_dir: Path, year_str: str = "") -> Path:
-    reg, notice, errors = find_templates(format_dir)
-    if errors:
-        raise ValueError(errors[0])
-    assert reg is not None
-    return reg
-
-
-def choose_template_notice(format_dir: Path, year_str: str = "") -> Path:
-    reg, notice, errors = find_templates(format_dir)
-    if errors:
-        raise ValueError(errors[-1])
-    assert notice is not None
-    return notice
-
-
-def choose_db_xlsb(db_dir: Path) -> Path:
-    if not db_dir.exists():
-        raise ValueError(f"[오류] DB 폴더가 없습니다: {db_dir}")
-
-    xlsb_files = [
-        p for p in db_dir.iterdir()
-        if p.is_file() and p.suffix.lower() == ".xlsb" and not p.name.startswith("~$")
-    ]
-    if not xlsb_files:
-        raise ValueError("[오류] DB 폴더에 .xlsb 파일이 없습니다.")
-    xlsb_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return xlsb_files[0]
-
-
-def search_schools_in_db(work_root: Path, keyword: str, limit: int = 30) -> List[str]:
-    work_root = Path(work_root).resolve()
-    dirs = get_project_dirs(work_root)
-    db_path = choose_db_xlsb(dirs["DB"])
-
-    kw = (keyword or "").strip()
-    if not kw:
-        return []
-
-    kw_norm = normalize_text(kw)
-
-    results: List[str] = []
-    seen = set()
-
-    with open_xlsb_workbook(str(db_path)) as wb:
-        sheet_names = wb.sheets
-        if not sheet_names:
-            return []
-        with wb.get_sheet(sheet_names[0]) as sh:
-            for r_idx, row in enumerate(sh.rows()):
-                if r_idx < 8:
-                    continue
-                if len(row) <= 4:
-                    continue
-                v = row[4].v  # E열
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if not s:
-                    continue
-
-                if kw_norm and (kw_norm in normalize_text(s)) and s not in seen:
-                    seen.add(s)
-                    results.append(s)
-                    if len(results) >= limit:
-                        break
-
-    return results
-
-
-# =========================
-# DB validate (xlsb)
-# =========================
-def school_exists_in_db(db_dir: Path, school_name: str) -> Path:
-    db_path = choose_db_xlsb(db_dir)
-
-    target = (school_name or "").strip()
-    if not target:
-        raise ValueError("[오류] 학교명이 비어 있습니다(DB 검증 불가).")
-
-    target_norm = normalize_text(target)
-    found = False
-
-    with open_xlsb_workbook(str(db_path)) as wb:
-        sheet_names = wb.sheets
-        if not sheet_names:
-            raise ValueError("[오류] DB xlsb에 시트가 없습니다.")
-        with wb.get_sheet(sheet_names[0]) as sh:
-            for r_idx, row in enumerate(sh.rows()):
-                if r_idx < 8:
-                    continue
-                if len(row) <= 4:
-                    continue
-                v = row[4].v  # E열
-                if v is None:
-                    continue
-                cell = str(v).strip()
-                if not cell:
-                    continue
-                cell_norm = normalize_text(cell)
-                if target_norm and cell_norm and (target_norm in cell_norm):
-                    found = True
-                    break
-
-    if not found:
-        raise ValueError(f"[오류] DB(E열 9행~)에서 학교명 '{target}' 포함 항목을 찾지 못했습니다.")
-
-    return db_path
-
-
-def _normalize_domain(raw: str) -> str:
-    if raw is None:
-        return ""
-    s = str(raw).strip()
-    if not s:
-        return ""
-    s = re.sub(r"^https?://", "", s, flags=re.I)
-    s = s.split("/")[0].strip()
-    return s
-
-
-def get_school_domain_from_db(db_dir: Path, school_name: str) -> Optional[str]:
-    """
-    DB xlsb에서:
-    - E열: 학교명 매칭
-    - F열: 홈페이지(리딩게이트 전용 도메인) 반환
-    없으면 None
-    """
-    db_path = choose_db_xlsb(db_dir)
-    target = (school_name or "").strip()
-    if not target:
-        return None
-    target_norm = normalize_text(target)
-
-    with open_xlsb_workbook(str(db_path)) as wb:
-        sheet_names = wb.sheets
-        if not sheet_names:
-            return None
-        with wb.get_sheet(sheet_names[0]) as sh:
-            for r_idx, row in enumerate(sh.rows()):
-                if r_idx < 8:
-                    continue
-                if len(row) <= 5:
-                    continue
-                ev = row[4].v  # E
-                if ev is None:
-                    continue
-                ecell = str(ev).strip()
-                if not ecell:
-                    continue
-                if target_norm and (target_norm in normalize_text(ecell)):
-                    fv = row[5].v  # F
-                    dom = _normalize_domain("" if fv is None else str(fv))
-                    return dom if dom else None
-    return None
-
-
-# =========================
-# openpyxl custom prop guard
-# =========================
 def safe_load_workbook(xlsx_path: Path, data_only: bool = True):
     try:
         return load_workbook(xlsx_path, data_only=data_only)
@@ -571,13 +196,127 @@ def safe_load_workbook(xlsx_path: Path, data_only: bool = True):
             raise
         return load_workbook(xlsx_path, data_only=data_only, read_only=True)
 
+def header_map(ws, header_row: int = 1):
+    mapping = {}
+    for cell in ws[header_row]:
+        if cell.value is None:
+            continue
+        key = str(cell.value)
+        key = key.replace("\u00A0", " ")
+        key = re.sub(r"\s+", "", key)
+        key = key.replace(".", "")
+        mapping[key] = cell.column
+    return mapping
 
-# =========================
-# name normalize + suffix
-# =========================
-HANGUL_RE = re.compile(r"[가-힣]")
-EN_RE = re.compile(r"[A-Za-z]")
+def write_text_cell(ws, row: int, col: int, value: Any):
+    """
+    값은 그대로 문자열로 넣고, 셀 타입/서식은 텍스트로 강제.
+    - 3-1, 01, 010-1234 같은 것들 날짜/숫자로 안 바뀌게 막기 위함.
+    """
+    cell = ws.cell(row=row, column=col)
+    cell.value = "" if value is None else str(value)
+    cell.data_type = "s"
+    cell.number_format = "@"
+    return cell
 
+def find_last_data_row(ws, key_col: int, start_row: int) -> int:
+    last = start_row - 1
+    for r in range(start_row, ws.max_row + 1):
+        v = ws.cell(row=r, column=key_col).value
+        if v is not None and str(v).strip() != "":
+            last = r
+    return last
+
+def clear_sheet_rows(ws, start_row=2):
+    if ws.max_row >= start_row:
+        ws.delete_rows(start_row, ws.max_row - start_row + 1)
+
+def move_sheet_after(wb, sheet_name: str, after_name: str):
+    if sheet_name not in wb.sheetnames or after_name not in wb.sheetnames:
+        return
+    ws = wb[sheet_name]
+    wb._sheets.remove(ws)
+    idx = wb.sheetnames.index(after_name)
+    wb._sheets.insert(idx + 1, ws)
+
+def delete_rows_below(ws, last_keep_row: int):
+    if ws.max_row > last_keep_row:
+        ws.delete_rows(last_keep_row + 1, ws.max_row - last_keep_row)
+
+def clear_format_workbook_from_row(wb, start_row: int = 2):
+    """
+    모든 시트에서:
+    - start_row부터 실제 데이터가 있는 마지막 행까지 스캔
+    - 그 아래 행들에 대해서만 서식(fill, border) 제거
+    """
+    for ws in wb.worksheets:
+        last_data_row = 0
+        max_row = ws.max_row
+        max_col = ws.max_column or 1
+
+        # 실제 데이터 마지막 행 찾기
+        for r in range(start_row, max_row + 1):
+            row_has_value = False
+            for c in range(1, max_col + 1):
+                v = ws.cell(row=r, column=c).value
+                if v is not None and str(v).strip() != "":
+                    row_has_value = True
+                    break
+            if row_has_value:
+                last_data_row = r
+
+        if last_data_row == 0:
+            continue
+
+        # 마지막 데이터 행 아래부터 서식 제거
+        for r in range(last_data_row + 1, max_row + 1):
+            for c in range(1, max_col + 1):
+                cell = ws.cell(r, c)
+                cell.fill = PatternFill(fill_type=None)
+                cell.border = Border()
+
+def reset_view_to_a1(wb):
+    """
+    - 모든 시트: 화면은 A1, 커서는 A2
+    - 모든 시트: 1행 고정(freeze_panes = A2)
+    - 모든 시트: 그룹 선택(tabSelected) 해제
+    - 통합문서: 첫 번째 시트만 선택 + 활성
+    """
+    # 1) 공통 뷰/고정 설정
+    for ws in wb.worksheets:
+        sv = ws.sheet_view
+
+        # 화면/커서
+        sv.topLeftCell = "A1"
+        sv.activeCell = "A2"
+        sv.selection = [Selection(activeCell="A2", sqref="A2")]
+
+        # 1행 고정
+        ws.freeze_panes = "A2"
+
+        # 시트 그룹 선택 풀기
+        if hasattr(sv, "tabSelected"):
+            sv.tabSelected = False
+
+    # 2) 첫 번째 시트만 선택 + 활성
+    first_ws = wb.worksheets[0]
+    if hasattr(first_ws.sheet_view, "tabSelected"):
+        first_ws.sheet_view.tabSelected = True
+
+    wb.active = 0
+
+    # 3) 통합문서 뷰도 첫 시트 기준으로 통일
+    if getattr(wb, "views", None):
+        views = wb.views
+        if views:
+            views[0].activeTab = 0
+            views[0].firstSheet = 0
+
+
+
+
+
+# ========== L1: domain utils (names / headers / examples) ==========
 
 def normalize_name(raw: str) -> str:
     if raw is None:
@@ -608,7 +347,6 @@ def normalize_name(raw: str) -> str:
 
     return ""
 
-
 def normalize_name_key(raw: str) -> str:
     if raw is None:
         return ""
@@ -617,12 +355,10 @@ def normalize_name_key(raw: str) -> str:
     s = re.sub(r"\s+", "", s)
     return s.casefold()
 
-
 def english_casefold_key(name: str) -> str:
     if name is None:
         return ""
     return str(name).strip().casefold()
-
 
 def dedup_suffix_letters(n: int) -> str:
     if n <= 0:
@@ -633,7 +369,6 @@ def dedup_suffix_letters(n: int) -> str:
         out = chr(ord("A") + (n % 26)) + out
         n //= 26
     return out
-
 
 def apply_suffix_for_duplicates(names: List[str]) -> List[str]:
     total = {}
@@ -651,7 +386,6 @@ def apply_suffix_for_duplicates(names: List[str]) -> List[str]:
         seen[key] = seen.get(key, 0) + 1
         out.append(nm + dedup_suffix_letters(seen[key]))
     return out
-
 
 def _strip_korean_suffix_for_notice(raw_name: Any) -> str:
     """
@@ -674,7 +408,6 @@ def _strip_korean_suffix_for_notice(raw_name: Any) -> str:
 
     return s
 
-
 def notice_name_key(raw_name: Any) -> str:
     """
     안내파일 동명이인 판정용 최종 키:
@@ -683,7 +416,6 @@ def notice_name_key(raw_name: Any) -> str:
     base = _strip_korean_suffix_for_notice(raw_name)
     return normalize_name_key(base)
 
-# 헤더 정규화
 def _normalize_header_cell(val: Any) -> str:
     """
     엑셀 헤더 셀 정규화:
@@ -707,45 +439,6 @@ def _normalize_header_cell(val: Any) -> str:
     s = s.lower()
     return s
 
-# =========================
-# header detection (자동 헤더 감지)
-# =========================
-
-# 슬롯별 헤더 키워드 (느슨한 매칭)
-FRESHMEN_HEADER_SLOTS = {
-    "no":    ["no", "번호"],
-    "grade": ["학년"],
-    "class": ["반", "학급"],
-    "num":   ["번호", "번"],
-    "name":  ["성명", "이름", "학생이름"],
-}
-
-TRANSFER_HEADER_SLOTS = {
-    "no":    ["no", "번호"],
-    "grade": ["학년"],
-    "class": ["반", "학급"],
-    "number":["번호", "번", "출석번호"],
-    "name":  ["성명", "이름"],
-    "remark":["비고", "메모", "특이사항"],
-}
-
-WITHDRAW_HEADER_SLOTS = {
-    "no":    ["no", "번호"],
-    "grade": ["학년"],
-    "class": ["반", "학급"],
-    "name":  ["성명", "이름"],
-    "remark":["비고", "메모", "특이사항"],
-}
-
-TEACHER_HEADER_SLOTS = {
-    "no":      ["no", "번호"],
-    "position":["직위", "담당", "직위담당"],
-    "name":    ["성명", "이름", "선생님이름", "교사명", "교원명"],
-    "learn":   ["학습용id신청", "학습용id", "학습용", "학습용아이디"],
-    "admin":   ["관리용id신청", "관리용id", "관리용", "관리용아이디"],
-}
-
-# 헤더 감지
 def _build_header_slot_map(ws, header_row: int, slots: Dict[str, List[str]]) -> Dict[str, int]:
     """
     slots 정의(FRESHMEN_HEADER_SLOTS 등)를 기준으로
@@ -817,34 +510,22 @@ def _detect_header_row_generic(ws, slots: Dict[str, List[str]],
 
     return best_row
 
-
 def detect_header_row_freshmen(ws) -> int:
     return _detect_header_row_generic(ws, FRESHMEN_HEADER_SLOTS,
                                       max_search_row=15, max_col=10, min_match_slots=3)
-
 
 def detect_header_row_transfer(ws) -> int:
     return _detect_header_row_generic(ws, TRANSFER_HEADER_SLOTS,
                                       max_search_row=15, max_col=10, min_match_slots=3)
 
-
 def detect_header_row_withdraw(ws) -> int:
     return _detect_header_row_generic(ws, WITHDRAW_HEADER_SLOTS,
                                       max_search_row=15, max_col=10, min_match_slots=3)
-
 
 def detect_header_row_teacher(ws) -> int:
     # 교사는 NO / 이름 / 학년/반 / 신청 컬럼 중 최소 3슬롯 이상
     return _detect_header_row_generic(ws, TEACHER_HEADER_SLOTS,
                                       max_search_row=15, max_col=10, min_match_slots=3)
-
-# =========================
-# example row detection (예시 + 데이터 시작 행)
-# =========================
-EXAMPLE_NAMES_RAW = ["홍길동", "이순신", "유관순", "임꺽정"]
-EXAMPLE_NAMES_NORM = {normalize_text(n) for n in EXAMPLE_NAMES_RAW}
-EXAMPLE_KEYWORDS = ["예시"]  # 행 안 어느 셀이라도 '예시' 포함되면 예시로 처리
-
 
 def _row_is_empty(ws, row: int, max_col: Optional[int] = None) -> bool:
     if max_col is None:
@@ -854,7 +535,6 @@ def _row_is_empty(ws, row: int, max_col: Optional[int] = None) -> bool:
         if v is not None and str(v).strip() != "":
             return False
     return True
-
 
 def _row_has_example_keyword(ws, row: int, max_col: Optional[int] = None) -> bool:
     if max_col is None:
@@ -871,13 +551,11 @@ def _row_has_example_keyword(ws, row: int, max_col: Optional[int] = None) -> boo
                 return True
     return False
 
-
 def _cell_is_example_name(value: Any) -> bool:
     if value is None:
         return False
     s = normalize_text(str(value))
     return bool(s) and s in EXAMPLE_NAMES_NORM
-
 
 def detect_example_and_data_start(
     ws,
@@ -925,7 +603,6 @@ def detect_example_and_data_start(
     raise ValueError(
         f"[오류] 데이터 시작 행을 찾지 못했습니다. 헤더({header_row}행) 아래에 예시나 실제 데이터로 보이는 행이 없습니다."
     )
-
 
 def detect_input_layout(xlsx_path: Path, kind: str) -> Dict[str, Any]:
     """
@@ -976,11 +653,6 @@ def detect_input_layout(xlsx_path: Path, kind: str) -> Dict[str, Any]:
         "data_start_row": data_start_row,
     }
 
-
-# =========================
-# input readers
-# =========================
-
 def normalize_withdraw_class(raw, grade: int) -> str:
     """
     전출 명단 C열(반) 문자열을 통일된 형식으로 정규화:
@@ -1009,14 +681,17 @@ def normalize_withdraw_class(raw, grade: int) -> str:
         # 숫자가 전혀 없으면 그냥 원본 반환 (최소한 이상한 값이라는 걸 눈으로 보게)
         return s
 
-    # 🔴 여기서 "마지막 숫자 묶음"을 반 번호로 사용
+    # "마지막 숫자 묶음"을 반 번호로 사용
     class_no = int(nums[-1])
 
     return f"{grade}-{class_no}반"
 
-    
 
-# 신입생 파일
+
+
+
+# ========== L2: input readers (신입/전입/전출/교사) ==========
+
 def read_freshmen_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
@@ -1131,7 +806,6 @@ def read_freshmen_rows(
     )
     return out
 
-# 전입생 파일
 def read_transfer_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
@@ -1234,7 +908,6 @@ def read_transfer_rows(
     # 필요하면 여기서 grade / class / number 기준 정렬 가능
     return out
 
-# 교사 아이디 파일
 def read_teacher_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
@@ -1322,8 +995,6 @@ def read_teacher_rows(
 
     return out
 
-
-# 전출생 파일
 def read_withdraw_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
@@ -1414,137 +1085,11 @@ def read_withdraw_rows(
     return out
 
 
-# =========================
-# sheet utilities
-# =========================
-def header_map(ws, header_row: int = 1):
-    mapping = {}
-    for cell in ws[header_row]:
-        if cell.value is None:
-            continue
-        key = str(cell.value)
-        key = key.replace("\u00A0", " ")
-        key = re.sub(r"\s+", "", key)
-        key = key.replace(".", "")
-        mapping[key] = cell.column
-    return mapping
 
 
 
-def write_text_cell(ws, row: int, col: int, value: Any):
-    """
-    값은 그대로 문자열로 넣고, 셀 타입/서식은 텍스트로 강제.
-    - 3-1, 01, 010-1234 같은 것들 날짜/숫자로 안 바뀌게 막기 위함.
-    """
-    cell = ws.cell(row=row, column=col)
-    cell.value = "" if value is None else str(value)
-    cell.data_type = "s"
-    cell.number_format = "@"
-    return cell
+# ========== L3: roster / transfer / withdraw core logic ==========
 
-
-def find_last_data_row(ws, key_col: int, start_row: int) -> int:
-    last = start_row - 1
-    for r in range(start_row, ws.max_row + 1):
-        v = ws.cell(row=r, column=key_col).value
-        if v is not None and str(v).strip() != "":
-            last = r
-    return last
-
-
-def clear_sheet_rows(ws, start_row=2):
-    if ws.max_row >= start_row:
-        ws.delete_rows(start_row, ws.max_row - start_row + 1)
-
-
-def move_sheet_after(wb, sheet_name: str, after_name: str):
-    if sheet_name not in wb.sheetnames or after_name not in wb.sheetnames:
-        return
-    ws = wb[sheet_name]
-    wb._sheets.remove(ws)
-    idx = wb.sheetnames.index(after_name)
-    wb._sheets.insert(idx + 1, ws)
-
-
-def delete_rows_below(ws, last_keep_row: int):
-    if ws.max_row > last_keep_row:
-        ws.delete_rows(last_keep_row + 1, ws.max_row - last_keep_row)
-
-
-def clear_format_workbook_from_row(wb, start_row: int = 2):
-    """
-    모든 시트에서:
-    - start_row부터 실제 데이터가 있는 마지막 행까지 스캔
-    - 그 아래 행들에 대해서만 서식(fill, border) 제거
-    """
-    for ws in wb.worksheets:
-        last_data_row = 0
-        max_row = ws.max_row
-        max_col = ws.max_column or 1
-
-        # 실제 데이터 마지막 행 찾기
-        for r in range(start_row, max_row + 1):
-            row_has_value = False
-            for c in range(1, max_col + 1):
-                v = ws.cell(row=r, column=c).value
-                if v is not None and str(v).strip() != "":
-                    row_has_value = True
-                    break
-            if row_has_value:
-                last_data_row = r
-
-        if last_data_row == 0:
-            continue
-
-        # 마지막 데이터 행 아래부터 서식 제거
-        for r in range(last_data_row + 1, max_row + 1):
-            for c in range(1, max_col + 1):
-                cell = ws.cell(r, c)
-                cell.fill = PatternFill(fill_type=None)
-                cell.border = Border()
-
-
-def reset_view_to_a1(wb):
-    """
-    - 모든 시트: 화면은 A1, 커서는 A2
-    - 모든 시트: 1행 고정(freeze_panes = A2)
-    - 모든 시트: 그룹 선택(tabSelected) 해제
-    - 통합문서: 첫 번째 시트만 선택 + 활성
-    """
-    # 1) 공통 뷰/고정 설정
-    for ws in wb.worksheets:
-        sv = ws.sheet_view
-
-        # 화면/커서
-        sv.topLeftCell = "A1"
-        sv.activeCell = "A2"
-        sv.selection = [Selection(activeCell="A2", sqref="A2")]
-
-        # 1행 고정
-        ws.freeze_panes = "A2"
-
-        # 시트 그룹 선택 풀기
-        if hasattr(sv, "tabSelected"):
-            sv.tabSelected = False
-
-    # 2) 첫 번째 시트만 선택 + 활성
-    first_ws = wb.worksheets[0]
-    if hasattr(first_ws.sheet_view, "tabSelected"):
-        first_ws.sheet_view.tabSelected = True
-
-    wb.active = 0
-
-    # 3) 통합문서 뷰도 첫 시트 기준으로 통일
-    if getattr(wb, "views", None):
-        views = wb.views
-        if views:
-            views[0].activeTab = 0
-            views[0].firstSheet = 0
-
-
-# =========================
-# roster analyze
-# =========================
 def parse_roster_year_from_filename(roster_path: Path) -> Optional[int]:
     stem = roster_path.stem
     s = stem.replace("\u00A0", " ")
@@ -1559,7 +1104,6 @@ def parse_roster_year_from_filename(roster_path: Path) -> Optional[int]:
         return int(m2.group(1))
 
     return None
-
 
 def load_roster_sheet(dirs: Dict[str, Path], school_name: str):
     """
@@ -1617,7 +1161,6 @@ def load_roster_sheet(dirs: Dict[str, Path], school_name: str):
 
     return ws, roster_path, roster_year
 
-
 def parse_class_str(s: str) -> Optional[Tuple[int, str]]:
     if s is None:
         return None
@@ -1626,7 +1169,6 @@ def parse_class_str(s: str) -> Optional[Tuple[int, str]]:
         return None
     return int(m.group(1)), m.group(2).strip()
 
-
 def extract_id_prefix4(uid: str) -> Optional[int]:
     if uid is None:
         return None
@@ -1634,7 +1176,6 @@ def extract_id_prefix4(uid: str) -> Optional[int]:
     if len(s) >= 4 and s[:4].isdigit():
         return int(s[:4])
     return None
-
 
 def analyze_roster_once(roster_ws, input_year: int) -> Dict:
     hm = header_map(roster_ws, 1)
@@ -1700,10 +1241,6 @@ def analyze_roster_once(roster_ws, input_year: int) -> Dict:
         "name_count_by_roster_grade": name_counter_by_grade,
     }
 
-
-# =========================
-# transfer ids
-# =========================
 def build_transfer_ids(
     transfer_rows: List[Dict],
     roster_info: Dict,
@@ -1765,10 +1302,6 @@ def build_transfer_ids(
 
     return done, hold, final_prefix_by_current_grade
 
-
-# =========================
-# withdraw outputs
-# =========================
 def build_withdraw_outputs(
     roster_ws,
     withdraw_rows: List[Dict],
@@ -2028,6 +1561,11 @@ def build_withdraw_outputs(
     return done, hold
 
 
+
+
+
+# ========== L4: output writers (등록/안내/퇴원) ==========
+
 def write_withdraw_to_register(wb, done_rows: List[Dict], hold_rows: List[Dict]):
     # 🔹 퇴원 완료 시트: 항상 사용 (없으면 생성)
     ws_done = wb["퇴원"] if "퇴원" in wb.sheetnames else wb.create_sheet("퇴원")
@@ -2096,10 +1634,6 @@ def write_withdraw_to_register(wb, done_rows: List[Dict], hold_rows: List[Dict])
     if ws_hold is not None:
         _format_sheet(ws_hold)
 
-
-# =========================
-# register fill (rebuild)
-# =========================
 def school_kind_from_name(school_name: str) -> Tuple[str, str]:
     s = (school_name or "").strip()
     if not s:
@@ -2112,7 +1646,6 @@ def school_kind_from_name(school_name: str) -> Tuple[str, str]:
     if last == "고":
         return "고등부", "고"
     return "", ""
-
 
 def write_transfer_hold_sheet(wb, hold_rows: List[Dict]):
     sheet_name = "전입생_보류"
@@ -2402,7 +1935,6 @@ def fill_register(
     backup_if_exists(out_path)
     wb.save(out_path)
 
-
 def _parse_grade_class_from_register(raw: Any) -> Tuple[Optional[int], str]:
     """
     register의 수강반 컬럼 해석용.
@@ -2435,11 +1967,6 @@ def _parse_grade_class_from_register(raw: Any) -> Tuple[Optional[int], str]:
     cls_str = str(int(m.group(2)))    # 반도 01 → 1
 
     return grade, cls_str
-
-FILL_TRANSFER = PatternFill("solid", fgColor="F8CBAD")  # 옅은 주황
-FILL_DUP      = PatternFill("solid", fgColor="FFFF00")  # 노랑
-FILL_GREY     = PatternFill("solid", fgColor="D9D9D9")  # 회색
-
 
 def build_notice_student_sheet(
     ws_notice,
@@ -2565,7 +2092,6 @@ def build_notice_student_sheet(
         running_no += 1
         cur_row += 1
 
-
 def build_notice_teacher_sheet(
     ws_notice,
     teacher_rows: List[Dict],
@@ -2657,7 +2183,6 @@ def build_notice_teacher_sheet(
         r_out += 1
 
     delete_rows_below(ws_notice, r_out - 1)
-
 
 def build_notice_file(
     template_notice_path: Path,
@@ -2788,10 +2313,6 @@ def build_notice_file(
 
     wb_notice.save(out_notice_path)
 
-
-# =========================
-# MAIL TEMPLATE (텍스트 치환)
-# =========================
 def render_mail_text(
     mail_template_text: str,
     school_name: str,
@@ -2809,6 +2330,409 @@ def render_mail_text(
         txt = re.sub(r"[A-Za-z0-9\-]+\.readinggate\.com", domain, txt)
     return txt
 
+
+
+
+
+
+# ========== L5: orchestrator (scan / execute / run) ==========
+
+def get_project_dirs(work_root: Path) -> Dict[str, Path]:
+    """
+    작업 폴더(work_root) 구조:
+
+    work_root/
+      ├─ ●resources/  (또는 이름에 'resources' 포함된 아무 폴더 1개)
+      │    ├─ DB/
+      │    ├─ templates/
+      │    └─ notices/
+      ├─ A초등학교/
+      ├─ B중학교/
+      └─ ...
+    """
+    work_root = work_root.resolve()
+
+    # 이름에 'resources' 가 들어간 폴더들을 모두 수집
+    candidates = [
+        p for p in work_root.iterdir()
+        if p.is_dir() and "resources" in p.name.lower()
+    ]
+
+    if len(candidates) == 0:
+        # 아무것도 없으면 기본값: work_root/resources
+        resources_root = work_root / "resources"
+    elif len(candidates) == 1:
+        resources_root = candidates[0]
+    else:
+        # 여러 개면 애매하니까 바로 에러
+        names = [p.name for p in candidates]
+        raise ValueError(
+            f"[오류] 작업 폴더 내에 'resources'를 포함한 폴더가 여러 개 있습니다: {names}"
+        )
+
+    return {
+        "WORK_ROOT": work_root,
+        "RESOURCES_ROOT": resources_root,
+        "DB": resources_root / "DB",
+        "TEMPLATES": resources_root / "templates",
+        "NOTICES": resources_root / "notices",
+        "SCHOOL_ROOT": work_root,  # 학교 폴더는 work_root 바로 아래
+    }
+
+def find_templates(format_dir: Path) -> Tuple[Optional[Path], Optional[Path], List[str]]:
+    """
+    [templates] 폴더 템플릿 2개 식별:
+    - 등록 템플릿: 파일명에 '등록' 포함
+    - 안내 템플릿: 파일명에 '안내' 포함
+    """
+    format_dir = Path(format_dir).resolve()
+    if not format_dir.exists():
+        return None, None, [f"[오류] [templates] 폴더를 찾을 수 없습니다: {format_dir}"]
+
+    xlsx_files = [
+        p for p in format_dir.iterdir()
+        if p.is_file() and p.suffix.lower() == ".xlsx" and not p.name.startswith("~$")
+    ]
+    if not xlsx_files:
+        return None, None, [f"[오류] [templates] 폴더에 .xlsx 파일이 없습니다: {format_dir}"]
+
+    reg = [p for p in xlsx_files if "등록" in p.stem]
+    notice = [p for p in xlsx_files if "안내" in p.stem]
+
+    errors: List[str] = []
+    if len(reg) == 0:
+        errors.append("[오류] [templates] 폴더에서 '등록' 템플릿을 찾지 못했습니다. (파일명에 '등록' 포함)")
+    elif len(reg) > 1:
+        errors.append("[오류] [templates] 폴더에 '등록' 템플릿이 여러 개입니다.")
+
+    if len(notice) == 0:
+        errors.append("[오류] [templates] 폴더에서 '안내' 템플릿을 찾지 못했습니다. (파일명에 '안내' 포함)")
+    elif len(notice) > 1:
+        errors.append("[오류] [templates] 폴더에 '안내' 템플릿이 여러 개입니다.")
+
+    if errors:
+        return None, None, errors
+
+    return reg[0], notice[0], []
+
+def scan_work_root(work_root: Path) -> Dict[str, Any]:
+    """
+    작업 루트에서 resources/DB, resources/templates, resources/notices, 학교 폴더 상태를 점검한다.
+    app.py는 여기서 다음 키들을 기대하고 있음:
+
+      - ok: bool
+      - errors: List[str]
+      - message: str
+      - school_folders: List[str]
+      - notice_titles: List[str]
+
+      - db_ok: bool
+      - errors_db: List[str]
+      - db_file: Optional[Path]
+
+      - format_ok: bool
+      - errors_format: List[str]
+      - register_template: Optional[Path]
+      - notice_template: Optional[Path]
+    """
+    work_root = work_root.resolve()
+    dirs = get_project_dirs(work_root)
+
+    # 전체 에러
+    errors: List[str] = []
+
+    # -------------------------
+    # 0. resources 루트
+    # -------------------------
+    res_root = dirs["RESOURCES_ROOT"].resolve()
+
+    # 학교 폴더 목록 (resources 폴더 제외)
+    school_folders = [
+        p.name
+        for p in work_root.iterdir()
+        if p.is_dir()
+        and p.resolve() != res_root
+        and not p.name.startswith(".")
+    ]
+    school_folders.sort()
+
+    # -------------------------
+    # 1. DB 폴더 점검
+    # -------------------------
+    db_ok = False
+    errors_db: List[str] = []
+    db_file: Optional[Path] = None
+
+    db_dir = dirs["DB"]
+    if not db_dir.exists():
+        errors_db.append("[오류] resources/DB 폴더가 없습니다.")
+    else:
+        db_files = [
+            p for p in db_dir.glob("*.xlsb")
+            if "학교전체명단" in p.stem and not p.name.startswith("~$")
+        ]
+        if len(db_files) == 0:
+            errors_db.append("[오류] DB 폴더에 '학교전체명단' xlsb 파일이 없습니다.")
+        elif len(db_files) > 1:
+            errors_db.append("[오류] DB 폴더에 '학교전체명단' xlsb 파일이 2개 이상입니다.")
+        else:
+            db_ok = True
+            db_file = db_files[0]
+
+    # -------------------------
+    # 2. templates(양식) 폴더 점검
+    # -------------------------
+    format_ok = False
+    errors_format: List[str] = []
+    register_template: Optional[Path] = None
+    notice_template: Optional[Path] = None
+
+    tpl_dir = dirs["TEMPLATES"]
+    if not tpl_dir.exists():
+        errors_format.append("[오류] resources/templates 폴더가 없습니다.")
+    else:
+        reg_files = [
+            p for p in tpl_dir.glob("*.xlsx")
+            if "등록" in p.stem and not p.name.startswith("~$")
+        ]
+        notice_files = [
+            p for p in tpl_dir.glob("*.xlsx")
+            if "안내" in p.stem and not p.name.startswith("~$")
+        ]
+
+        if len(reg_files) != 1:
+            errors_format.append("templates 폴더에 '등록' 템플릿 파일이 정확히 1개 있어야 합니다.")
+        else:
+            register_template = reg_files[0]
+
+        if len(notice_files) != 1:
+            errors_format.append("templates 폴더에 '안내' 템플릿 파일이 정확히 1개 있어야 합니다.")
+        else:
+            notice_template = notice_files[0]
+
+        if not errors_format:
+            format_ok = True
+
+    # -------------------------
+    # 3. notices 폴더 점검
+    # -------------------------
+    notice_dir = dirs["NOTICES"]
+    notice_titles: List[str] = []
+
+    if not notice_dir.exists():
+        errors.append("[오류] resources/notices 폴더가 없습니다.")
+    else:
+        txt_files = [p for p in notice_dir.glob("*.txt") if p.is_file()]
+        if not txt_files:
+            errors.append("[오류] notices 폴더에 .txt 파일이 없습니다.")
+        else:
+            notice_titles = sorted({p.stem.strip() for p in txt_files})
+
+    # -------------------------
+    # 4. 전체 에러 합치기
+    # -------------------------
+    errors.extend(errors_db)
+    errors.extend(errors_format)
+
+    ok = len(errors) == 0
+    message = (
+        "[OK] resources(DB/templates/notices)가 정상적으로 준비되었습니다."
+        if ok else ""
+    )
+
+    return {
+        "ok": ok,
+        "errors": errors,
+        "message": message,
+        "school_folders": school_folders,
+        "notice_titles": notice_titles,
+
+        # DB 상태 (app.py에서 사용)
+        "db_ok": db_ok,
+        "errors_db": errors_db,
+        "db_file": db_file,
+
+        # 양식 상태 (app.py에서 사용)
+        "format_ok": format_ok,
+        "errors_format": errors_format,
+        "register_template": register_template,
+        "notice_template": notice_template,
+    }
+
+def find_single_input_file(input_dir: Path, keywords: Sequence[str]) -> Optional[Path]:
+    if not input_dir.exists():
+        return None
+
+    kw_list: List[str] = []
+    for k in keywords:
+        k = "" if k is None else str(k).strip()
+        if k:
+            kw_list.append(k)
+
+    if not kw_list:
+        return None
+
+    candidates: List[Path] = []
+    for p in input_dir.iterdir():
+        if not (p.is_file() and p.suffix.lower() == ".xlsx"):
+            continue
+        if p.name.startswith("~$"):
+            continue
+        if any(text_contains(p.name, kw) for kw in kw_list):
+            candidates.append(p)
+
+    if len(candidates) == 0:
+        return None
+    if len(candidates) > 1:
+        raise ValueError(f"[오류] {kw_list} 포함 .xlsx 파일이 2개 이상: {[c.name for c in candidates]}")
+    return candidates[0]
+
+def choose_template_register(format_dir: Path, year_str: str = "") -> Path:
+    reg, notice, errors = find_templates(format_dir)
+    if errors:
+        raise ValueError(errors[0])
+    assert reg is not None
+    return reg
+
+def choose_template_notice(format_dir: Path, year_str: str = "") -> Path:
+    reg, notice, errors = find_templates(format_dir)
+    if errors:
+        raise ValueError(errors[-1])
+    assert notice is not None
+    return notice
+
+def choose_db_xlsb(db_dir: Path) -> Path:
+    if not db_dir.exists():
+        raise ValueError(f"[오류] DB 폴더가 없습니다: {db_dir}")
+
+    xlsb_files = [
+        p for p in db_dir.iterdir()
+        if p.is_file() and p.suffix.lower() == ".xlsb" and not p.name.startswith("~$")
+    ]
+    if not xlsb_files:
+        raise ValueError("[오류] DB 폴더에 .xlsb 파일이 없습니다.")
+    xlsb_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return xlsb_files[0]
+
+def search_schools_in_db(work_root: Path, keyword: str, limit: int = 30) -> List[str]:
+    work_root = Path(work_root).resolve()
+    dirs = get_project_dirs(work_root)
+    db_path = choose_db_xlsb(dirs["DB"])
+
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+
+    kw_norm = normalize_text(kw)
+
+    results: List[str] = []
+    seen = set()
+
+    with open_xlsb_workbook(str(db_path)) as wb:
+        sheet_names = wb.sheets
+        if not sheet_names:
+            return []
+        with wb.get_sheet(sheet_names[0]) as sh:
+            for r_idx, row in enumerate(sh.rows()):
+                if r_idx < 8:
+                    continue
+                if len(row) <= 4:
+                    continue
+                v = row[4].v  # E열
+                if v is None:
+                    continue
+                s = str(v).strip()
+                if not s:
+                    continue
+
+                if kw_norm and (kw_norm in normalize_text(s)) and s not in seen:
+                    seen.add(s)
+                    results.append(s)
+                    if len(results) >= limit:
+                        break
+
+    return results
+
+def school_exists_in_db(db_dir: Path, school_name: str) -> Path:
+    db_path = choose_db_xlsb(db_dir)
+
+    target = (school_name or "").strip()
+    if not target:
+        raise ValueError("[오류] 학교명이 비어 있습니다(DB 검증 불가).")
+
+    target_norm = normalize_text(target)
+    found = False
+
+    with open_xlsb_workbook(str(db_path)) as wb:
+        sheet_names = wb.sheets
+        if not sheet_names:
+            raise ValueError("[오류] DB xlsb에 시트가 없습니다.")
+        with wb.get_sheet(sheet_names[0]) as sh:
+            for r_idx, row in enumerate(sh.rows()):
+                if r_idx < 8:
+                    continue
+                if len(row) <= 4:
+                    continue
+                v = row[4].v  # E열
+                if v is None:
+                    continue
+                cell = str(v).strip()
+                if not cell:
+                    continue
+                cell_norm = normalize_text(cell)
+                if target_norm and cell_norm and (target_norm in cell_norm):
+                    found = True
+                    break
+
+    if not found:
+        raise ValueError(f"[오류] DB(E열 9행~)에서 학교명 '{target}' 포함 항목을 찾지 못했습니다.")
+
+    return db_path
+
+def _normalize_domain(raw: str) -> str:
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    s = re.sub(r"^https?://", "", s, flags=re.I)
+    s = s.split("/")[0].strip()
+    return s
+
+def get_school_domain_from_db(db_dir: Path, school_name: str) -> Optional[str]:
+    """
+    DB xlsb에서:
+    - E열: 학교명 매칭
+    - F열: 홈페이지(리딩게이트 전용 도메인) 반환
+    없으면 None
+    """
+    db_path = choose_db_xlsb(db_dir)
+    target = (school_name or "").strip()
+    if not target:
+        return None
+    target_norm = normalize_text(target)
+
+    with open_xlsb_workbook(str(db_path)) as wb:
+        sheet_names = wb.sheets
+        if not sheet_names:
+            return None
+        with wb.get_sheet(sheet_names[0]) as sh:
+            for r_idx, row in enumerate(sh.rows()):
+                if r_idx < 8:
+                    continue
+                if len(row) <= 5:
+                    continue
+                ev = row[4].v  # E
+                if ev is None:
+                    continue
+                ecell = str(ev).strip()
+                if not ecell:
+                    continue
+                if target_norm and (target_norm in normalize_text(ecell)):
+                    fv = row[5].v  # F
+                    dom = _normalize_domain("" if fv is None else str(fv))
+                    return dom if dom else None
+    return None
 
 def load_notice_templates(work_root: Path) -> dict[str, str]:
     dirs = get_project_dirs(work_root)
@@ -2831,16 +2755,11 @@ def load_notice_templates(work_root: Path) -> dict[str, str]:
 
     return result
 
-
 def domain_missing_message(school_name: str) -> str:
     _, kind_prefix = school_kind_from_name(school_name)
     kind_disp = kind_prefix if kind_prefix else "학교"
     return f"{kind_disp} (사용자가 작업중인) 의 도메인 주소가 존재하지 않습니다. 학교 전체 명단 파일을 확인하세요."
 
-
-# =========================
-# NEW: SCAN (pre-check)
-# =========================
 def scan_pipeline(
     work_root: Path,
     school_name: str,
@@ -3119,7 +3038,6 @@ def scan_pipeline(
         sr.ok = False
         return sr
 
-
 def _extract_layout(layout_overrides: Dict[str, Any], kind: str, default_header: int):
     """
     layout_overrides[kind]가
@@ -3142,11 +3060,6 @@ def _extract_layout(layout_overrides: Dict[str, Any], kind: str, default_header:
 
     # 아무 것도 없으면 자동 감지
     return default_header, None
-
-
-# =========================
-# EXECUTE: FULL REBUILD
-# =========================
 
 def execute_pipeline(
     scan: ScanResult,
@@ -3413,10 +3326,6 @@ def execute_pipeline(
             logs=logs,
         )
 
-# =========================
-# RUN PIPELINE (wrapper)
-# =========================
-
 def run_pipeline(
     work_root: Path,
     school_name: str,
@@ -3505,3 +3414,5 @@ def run_pipeline_partial(
         work_date=open_date,
         roster_basis_date=None,
     )
+
+ 
