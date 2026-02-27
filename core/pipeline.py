@@ -12,23 +12,9 @@ from typing import Dict, List, Optional, Tuple, Any, Sequence
 from collections import Counter, defaultdict
 
 from openpyxl import load_workbook
-<<<<<<< HEAD
-<<<<<<< HEAD
 from openpyxl.styles import PatternFill, Border
 from openpyxl.worksheet.views import Selection
-<<<<<<< HEAD
-=======
-from openpyxl.styles import PatternFill
 from pyxlsb import open_workbook as open_xlsb_workbook
->>>>>>> f3aadff (Initial commit)
-=======
-from openpyxl.styles import PatternFill, Border
-from pyxlsb import open_workbook as open_xlsb_workbook
-from openpyxl.worksheet.views import Selection
->>>>>>> 9bb7b8e (Add files via upload)
-=======
-from pyxlsb import open_workbook as open_xlsb_workbook
->>>>>>> 0f1c56e (20260227)
 
 from core.utils import normalize_text, text_contains, text_eq
 
@@ -89,15 +75,7 @@ class ScanResult:
 
 
 # =========================
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-# Helpers
-=======
 # Input keyword sets
->>>>>>> 0f1c56e (20260227)
 # =========================
 FRESHMEN_KEYWORDS = ["신입생", "신입"]
 TEACHER_KEYWORDS  = ["교사", "교원"]
@@ -915,462 +893,6 @@ def detect_example_and_data_start(
     )
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-# Input keyword sets
-# =========================
-FRESHMEN_KEYWORDS = ["신입생", "신입"]
-TEACHER_KEYWORDS  = ["교사", "교원"]
-TRANSFER_KEYWORDS = ["전입생", "전입"]
-WITHDRAW_KEYWORDS = ["전출생", "전출"]
-
-
-# =========================
-# Paths
-# =========================
-def get_project_dirs(work_root: Path) -> Dict[str, Path]:
-    """
-    작업 폴더(work_root) 기준 경로 규약.
-
-    work_root/
-      DB/      : 학교 전체 명단(.xlsb)
-      양식/    : 템플릿(등록/안내) .xlsx
-      <학교폴더>/ : 인풋 파일들이 바로 들어있는 폴더
-        작업/  : 산출물 생성 폴더(자동)
-    """
-    work_root = Path(work_root).resolve()
-    return {
-        "WORK_ROOT": work_root,
-        "DB": work_root / "DB",
-        "FORMAT": work_root / "양식",
-        "SCHOOL_ROOT": work_root,  # 하위에 학교 폴더들이 존재
-    }
-
-
-# =========================
-# File helpers
-# =========================
-
-def list_school_folders(work_root: Path) -> List[str]:
-    root = Path(work_root).resolve()
-    if not root.exists():
-        return []
-    skip = {"DB", "양식"}
-    schools: List[str] = []
-    for p in root.iterdir():
-        if p.is_dir() and p.name not in skip and not p.name.startswith("."):
-            schools.append(p.name)
-    schools.sort()
-    return schools
-
-
-def find_templates(format_dir: Path) -> Tuple[Optional[Path], Optional[Path], List[str]]:
-    """
-    [양식] 폴더 템플릿 2개 식별:
-    - 등록 템플릿: 파일명에 '등록' 포함
-    - 안내 템플릿: 파일명에 '안내' 포함
-    """
-    format_dir = Path(format_dir).resolve()
-    if not format_dir.exists():
-        return None, None, [f"[오류] [양식] 폴더를 찾을 수 없습니다: {format_dir}"]
-
-    xlsx_files = [
-        p for p in format_dir.iterdir()
-        if p.is_file() and p.suffix.lower() == ".xlsx" and not p.name.startswith("~$")
-    ]
-    if not xlsx_files:
-        return None, None, [f"[오류] [양식] 폴더에 .xlsx 파일이 없습니다: {format_dir}"]
-
-    reg = [p for p in xlsx_files if "등록" in p.stem]
-    notice = [p for p in xlsx_files if "안내" in p.stem]
-
-    errors: List[str] = []
-    if len(reg) == 0:
-        errors.append("[오류] [양식] 폴더에서 '등록' 템플릿을 찾지 못했습니다. (파일명에 '등록' 포함)")
-    elif len(reg) > 1:
-        errors.append("[오류] [양식] 폴더에 '등록' 템플릿이 여러 개입니다. 1개만 남겨주세요.")
-
-    if len(notice) == 0:
-        errors.append("[오류] [양식] 폴더에서 '안내' 템플릿을 찾지 못했습니다. (파일명에 '안내' 포함)")
-    elif len(notice) > 1:
-        errors.append("[오류] [양식] 폴더에 '안내' 템플릿이 여러 개입니다. 1개만 남겨주세요.")
-
-    if errors:
-        return None, None, errors
-
-    return reg[0], notice[0], []
-
-
-def scan_work_root(work_root: Path) -> Dict[str, Any]:
-    """UI의 '경로 적용' 단계용 스캔.
-    - DB, 양식(templates) 각각을 따로 진단해서 UI에서 별도 안내할 수 있게 한다.
-    """
-    work_root = Path(work_root).expanduser().resolve()
-    dirs = get_project_dirs(work_root)
-
-    errors_db: List[str] = []
-    errors_format: List[str] = []
-
-    db_file: Optional[Path] = None
-    register_tmpl: Optional[Path] = None
-    notice_tmpl: Optional[Path] = None
-
-    # DB
-    try:
-        db_file = choose_db_xlsb(dirs["DB"])
-    except Exception as e:
-        errors_db.append(str(e))
-
-    # templates
-    try:
-        register_tmpl, notice_tmpl, tmpl_errors = find_templates(dirs["FORMAT"])
-        errors_format.extend(tmpl_errors)
-    except Exception as e:
-        errors_format.append(str(e))
-
-    schools = list_school_folders(work_root)
-
-    db_ok = len(errors_db) == 0 and db_file is not None
-    format_ok = len(errors_format) == 0 and register_tmpl is not None and notice_tmpl is not None
-    ok = db_ok and format_ok
-
-    return {
-        "ok": ok,
-        "db_ok": db_ok,
-        "format_ok": format_ok,
-        "errors": [*errors_db, *errors_format],
-        "errors_db": errors_db,
-        "errors_format": errors_format,
-        "work_root": work_root,
-        "db_file": db_file,
-        "register_template": register_tmpl,
-        "notice_template": notice_tmpl,
-        "school_folders": schools,
-    }
-
-
-
-def ensure_xlsx_only(p: Path) -> None:
-    if p.suffix.lower() != ".xlsx":
-        raise ValueError(f"[오류] 파일 형식이 .xlsx가 아닙니다: {p.name} (xlsx로 저장해서 넣어주세요)")
-
-
-def backup_if_exists(out_path: Path) -> Optional[Path]:
-    """기존 파일이 있으면 작업/_backup으로 이동."""
-    out_path = Path(out_path)
-    if not out_path.exists():
-        return None
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = out_path.parent / "_backup"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    dest = backup_dir / f"{out_path.stem}_{ts}{out_path.suffix}"
-    out_path.replace(dest)
-    return dest
-
-
-def find_single_input_file(input_dir: Path, keywords: Sequence[str]) -> Optional[Path]:
-    if not input_dir.exists():
-        return None
-
-    kw_list: List[str] = []
-    for k in keywords:
-        k = "" if k is None else str(k).strip()
-        if k:
-            kw_list.append(k)
-
-    if not kw_list:
-        return None
-
-    candidates: List[Path] = []
-    for p in input_dir.iterdir():
-        if not (p.is_file() and p.suffix.lower() == ".xlsx"):
-            continue
-        if p.name.startswith("~$"):
-            continue
-        if any(text_contains(p.name, kw) for kw in kw_list):
-            candidates.append(p)
-
-    if len(candidates) == 0:
-        return None
-    if len(candidates) > 1:
-        raise ValueError(f"[오류] {kw_list} 포함 .xlsx 파일이 2개 이상: {[c.name for c in candidates]}")
-    return candidates[0]
-
-
-def choose_template_register(format_dir: Path, year_str: str = "") -> Path:
-    reg, notice, errors = find_templates(format_dir)
-    if errors:
-        raise ValueError(errors[0])
-    assert reg is not None
-    return reg
-
-
-
-def choose_template_notice(format_dir: Path, year_str: str = "") -> Path:
-    reg, notice, errors = find_templates(format_dir)
-    if errors:
-        raise ValueError(errors[-1])
-    assert notice is not None
-    return notice
-
-
-
-def choose_db_xlsb(db_dir: Path) -> Path:
-    if not db_dir.exists():
-        raise ValueError(f"[오류] DB 폴더가 없습니다: {db_dir}")
-
-    xlsb_files = [p for p in db_dir.iterdir() if p.is_file() and p.suffix.lower() == ".xlsb" and not p.name.startswith("~$")]
-    if not xlsb_files:
-        raise ValueError("[오류] DB 폴더에 .xlsb 파일이 없습니다.")
-    xlsb_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return xlsb_files[0]
-
-
-def search_schools_in_db(work_root: Path, keyword: str, limit: int = 30) -> List[str]:
-    work_root = Path(work_root).resolve()
-    dirs = get_project_dirs(work_root)
-    db_path = choose_db_xlsb(dirs["DB"])
-
-    kw = (keyword or "").strip()
-    if not kw:
-        return []
-
-    kw_norm = normalize_text(kw)
-
-    results: List[str] = []
-    seen = set()
-
-    with open_xlsb_workbook(str(db_path)) as wb:
-        sheet_names = wb.sheets
-        if not sheet_names:
-            return []
-        with wb.get_sheet(sheet_names[0]) as sh:
-            for r_idx, row in enumerate(sh.rows()):
-                if r_idx < 8:
-                    continue
-                if len(row) <= 4:
-                    continue
-                v = row[4].v  # E열
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if not s:
-                    continue
-
-                if kw_norm and (kw_norm in normalize_text(s)) and s not in seen:
-                    seen.add(s)
-                    results.append(s)
-                    if len(results) >= limit:
-                        break
-
-    return results
-
-
-# =========================
-# DB validate (xlsb)
-# =========================
-def school_exists_in_db(db_dir: Path, school_name: str) -> Path:
-    db_path = choose_db_xlsb(db_dir)
-
-    target = (school_name or "").strip()
-    if not target:
-        raise ValueError("[오류] 학교명이 비어 있습니다(DB 검증 불가).")
-
-    target_norm = normalize_text(target)
-    found = False
-
-    with open_xlsb_workbook(str(db_path)) as wb:
-        sheet_names = wb.sheets
-        if not sheet_names:
-            raise ValueError("[오류] DB xlsb에 시트가 없습니다.")
-        with wb.get_sheet(sheet_names[0]) as sh:
-            for r_idx, row in enumerate(sh.rows()):
-                if r_idx < 8:
-                    continue
-                if len(row) <= 4:
-                    continue
-                v = row[4].v  # E열
-                if v is None:
-                    continue
-                cell = str(v).strip()
-                if not cell:
-                    continue
-                cell_norm = normalize_text(cell)
-                if target_norm and cell_norm and (target_norm in cell_norm):
-                    found = True
-                    break
-
-    if not found:
-        raise ValueError(f"[오류] DB(E열 9행~)에서 학교명 '{target}' 포함 항목을 찾지 못했습니다.")
-
-    return db_path
-
-
-def _normalize_domain(raw: str) -> str:
-    if raw is None:
-        return ""
-    s = str(raw).strip()
-    if not s:
-        return ""
-    s = re.sub(r"^https?://", "", s, flags=re.I)
-    s = s.split("/")[0].strip()
-    return s
-
-
-def get_school_domain_from_db(db_dir: Path, school_name: str) -> Optional[str]:
-    """
-    DB xlsb에서:
-    - E열: 학교명 매칭
-    - F열: 홈페이지(리딩게이트 전용 도메인) 반환
-    없으면 None
-    """
-    db_path = choose_db_xlsb(db_dir)
-    target = (school_name or "").strip()
-    if not target:
-        return None
-    target_norm = normalize_text(target)
-
-    with open_xlsb_workbook(str(db_path)) as wb:
-        sheet_names = wb.sheets
-        if not sheet_names:
-            return None
-        with wb.get_sheet(sheet_names[0]) as sh:
-            for r_idx, row in enumerate(sh.rows()):
-                if r_idx < 8:
-                    continue
-                if len(row) <= 5:
-                    continue
-                ev = row[4].v  # E
-                if ev is None:
-                    continue
-                ecell = str(ev).strip()
-                if not ecell:
-                    continue
-                if target_norm and (target_norm in normalize_text(ecell)):
-                    fv = row[5].v  # F
-                    dom = _normalize_domain("" if fv is None else str(fv))
-                    return dom if dom else None
-    return None
-
-
-# =========================
-# openpyxl custom prop guard
-# =========================
-def safe_load_workbook(xlsx_path: Path, data_only: bool = True):
-    try:
-        return load_workbook(xlsx_path, data_only=data_only)
-    except TypeError as e:
-        msg = str(e)
-        if "openpyxl.packaging.custom" not in msg or "NoneType" not in msg:
-            raise
-
-        buffer = BytesIO()
-        with zipfile.ZipFile(xlsx_path, "r") as zin, zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                if item.filename == "docProps/custom.xml":
-                    root = ET.fromstring(zin.read(item.filename))
-                    ns = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
-                    tag = f"{{{ns}}}property"
-                    for prop in list(root.findall(tag)):
-                        name = prop.get("name")
-                        if name is None or str(name).strip() == "":
-                            root.remove(prop)
-                    new_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-                    zout.writestr(item, new_xml)
-                else:
-                    zout.writestr(item, zin.read(item.filename))
-
-        buffer.seek(0)
-        return load_workbook(buffer, data_only=data_only)
-
-
-# =========================
-# name normalize + suffix
-# =========================
-HANGUL_RE = re.compile(r"[가-힣]")
-EN_RE = re.compile(r"[A-Za-z]")
-
-
-def normalize_name(raw: str) -> str:
-    if raw is None:
-        return ""
-    s = str(raw).strip()
-    s = re.sub(r"[^A-Za-z가-힣\s]", "", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    if not s:
-        return ""
-
-    has_ko = bool(HANGUL_RE.search(s))
-    has_en = bool(EN_RE.search(s))
-
-    if has_ko and not has_en:
-        return s.replace(" ", "")
-
-    if has_en and not has_ko:
-        parts = [p for p in s.split(" ") if p]
-        parts = [p.lower().capitalize() for p in parts]
-        return "".join(parts)
-
-    if has_ko and has_en:
-        def _fix_en(m: re.Match) -> str:
-            tok = m.group(0).lower()
-            return tok[0].upper() + tok[1:] if tok else tok
-        s2 = re.sub(r"[A-Za-z]+", _fix_en, s)
-        return s2.replace(" ", "")
-
-    return ""
-
-
-def normalize_name_key(raw: str) -> str:
-    if raw is None:
-        return ""
-    s = str(raw).strip()
-    s = re.sub(r"[^A-Za-z가-힣\s]", "", s)
-    s = re.sub(r"\s+", "", s)
-    return s.casefold()
-
-
-def english_casefold_key(name: str) -> str:
-    if name is None:
-        return ""
-    return str(name).strip().casefold()
-
-
-def dedup_suffix_letters(n: int) -> str:
-    if n <= 0:
-        return ""
-    out = ""
-    while n > 0:
-        n -= 1
-        out = chr(ord("A") + (n % 26)) + out
-        n //= 26
-    return out
-
-
-def apply_suffix_for_duplicates(names: List[str]) -> List[str]:
-    total = {}
-    for nm in names:
-        key = english_casefold_key(nm)
-        total[key] = total.get(key, 0) + 1
-
-    seen = {}
-    out = []
-    for nm in names:
-        key = english_casefold_key(nm)
-        if total.get(key, 0) <= 1:
-            out.append(nm)
-            continue
-        seen[key] = seen.get(key, 0) + 1
-        out.append(nm + dedup_suffix_letters(seen[key]))
-    return out
-
-
-# =========================
-# input readers
-# =========================
-def read_freshmen_rows(xlsx_path: Path) -> List[Dict]:
-=======
 def detect_input_layout(xlsx_path: Path, kind: str) -> Dict[str, Any]:
     """
     UI에서 인풋 파일 구조를 미리 보여줄 때 사용.
@@ -1463,15 +985,10 @@ def read_freshmen_rows(
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
->>>>>>> 0f1c56e (20260227)
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
 
-<<<<<<< HEAD
-    out = []
-    row = 5
-=======
     # 1) 헤더 자동 감지 (필요 시)
     if header_row is None:
         header_row = detect_header_row_freshmen(ws)
@@ -1486,24 +1003,12 @@ def read_freshmen_rows(
 
     out = []
     row = data_start_row
->>>>>>> 0f1c56e (20260227)
     while True:
         grade = ws[f"B{row}"].value
         cls   = ws[f"C{row}"].value
         num   = ws[f"D{row}"].value
         name  = ws[f"E{row}"].value
 
-<<<<<<< HEAD
-        vals = [grade, cls, num, name]
-        if all(v is None or str(v).strip() == "" for v in vals):
-            break
-        if any(v is None or str(v).strip() == "" for v in vals):
-            raise ValueError(f"[오류] 신입생 파일 {row}행(B~E)에 빈 값이 있습니다.")
-
-        grade_i = int(str(grade).strip())
-        cls_s = str(cls).strip()
-        num_s = str(num).strip()
-=======
         # 1) 행 전체가 비어 있으면 종료
         if all(v is None or str(v).strip() == "" for v in [grade, cls, num, name]):
             break
@@ -1521,7 +1026,6 @@ def read_freshmen_rows(
 
         cls_s = str(cls).strip()
         num_s = "" if (num is None or str(num).strip() == "") else str(num).strip()
->>>>>>> 0f1c56e (20260227)
         name_n = normalize_name(name)
         if not name_n:
             raise ValueError(f"[오류] 신입생 파일 {row}행 성명(E) 정규화 결과가 비어 있습니다.")
@@ -1530,45 +1034,25 @@ def read_freshmen_rows(
         row += 1
 
     def _safe_int(x: str):
-<<<<<<< HEAD
-        try: return (0, int(x))
-        except: return (1, x)
-=======
         try:
             return (0, int(x))
         except Exception:
             return (1, x)
->>>>>>> 0f1c56e (20260227)
 
     out.sort(key=lambda r: (r["grade"], _safe_int(r["class"]), _safe_int(r["number"])))
     return out
 
 
-<<<<<<< HEAD
-def read_transfer_rows(xlsx_path: Path) -> List[Dict]:
-=======
 # 전입생 파일
 def read_transfer_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
->>>>>>> 0f1c56e (20260227)
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
 
-<<<<<<< HEAD
-    expected = ["no", "학년", "반", "번호", "성명", "비고"]
-    for col, exp in zip(["A","B","C","D","E","F"], expected):
-        v = ws[f"{col}2"].value
-        v = "" if v is None else re.sub(r"\s+","",str(v)).lower()
-        if v != re.sub(r"\s+","",exp).lower():
-            raise ValueError("[오류] 전입생 파일 헤더(2행 A~F)가 양식과 다릅니다.")
-
-    out = []
-    row = 5
-=======
     # 1) 헤더 자동 감지
     if header_row is None:
         header_row = detect_header_row_transfer(ws)
@@ -1584,24 +1068,12 @@ def read_transfer_rows(
     out = []
     row = data_start_row
 
->>>>>>> 0f1c56e (20260227)
     while True:
         grade = ws[f"B{row}"].value
         cls   = ws[f"C{row}"].value
         num   = ws[f"D{row}"].value
         name  = ws[f"E{row}"].value
 
-<<<<<<< HEAD
-        vals = [grade, cls, num, name]
-        if all(v is None or str(v).strip()=="" for v in vals):
-            break
-        if any(v is None or str(v).strip()=="" for v in vals):
-            raise ValueError(f"[오류] 전입생 파일 {row}행(B~E)에 빈 값이 있습니다.")
-
-        grade_i = int(str(grade).strip())
-        cls_s = str(cls).strip()
-        num_s = str(num).strip()
-=======
         if all(v is None or str(v).strip() == "" for v in [grade, cls, num, name]):
             break
 
@@ -1612,7 +1084,6 @@ def read_transfer_rows(
         grade_i = int(str(grade).strip())
         cls_s = str(cls).strip()
         num_s = "" if (num is None or str(num).strip() == "") else str(num).strip()
->>>>>>> 0f1c56e (20260227)
         name_n = normalize_name(name)
         if not name_n:
             raise ValueError(f"[오류] 전입생 파일 {row}행 성명(E) 정규화 결과가 비어 있습니다.")
@@ -1621,55 +1092,25 @@ def read_transfer_rows(
         row += 1
 
     def _safe_int(x: str):
-<<<<<<< HEAD
-        try: return (0, int(x))
-        except: return (1, x)
-=======
         try:
             return (0, int(x))
         except Exception:
             return (1, x)
->>>>>>> 0f1c56e (20260227)
 
     out.sort(key=lambda r: (r["grade"], _safe_int(r["class"]), _safe_int(r["number"])))
     return out
 
 
-<<<<<<< HEAD
-def read_teacher_rows(xlsx_path: Path) -> List[Dict]:
-=======
 # 교사 아이디 파일
 def read_teacher_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
->>>>>>> 0f1c56e (20260227)
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
 
-<<<<<<< HEAD
-    expected = ["NO", "직위,담당", "선생님이름", "학습용ID신청", "관리용ID신청"]
-    for col, exp in zip(["A","B","C","D","E"], expected):
-        v = ws[f"{col}3"].value
-        v = "" if v is None else re.sub(r"\s+","",str(v))
-        if v != re.sub(r"\s+","",exp):
-            raise ValueError("[오류] 교사 파일 헤더(3행 A~E)가 양식과 다릅니다.")
-
-    out = []
-    row = 4
-    while True:
-        b = ws[f"B{row}"].value
-        c = ws[f"C{row}"].value
-        d = ws[f"D{row}"].value
-        e = ws[f"E{row}"].value
-
-        if all(v is None or str(v).strip()=="" for v in [b,c,d,e]):
-            break
-
-        if c is None or str(c).strip()=="":
-=======
     # 1) 헤더 자동 감지
     if header_row is None:
         header_row = detect_header_row_teacher(ws)
@@ -1694,7 +1135,6 @@ def read_teacher_rows(
             break
 
         if c is None or str(c).strip() == "":
->>>>>>> 0f1c56e (20260227)
             row += 1
             continue
 
@@ -1703,17 +1143,6 @@ def read_teacher_rows(
             row += 1
             continue
 
-<<<<<<< HEAD
-        learn_apply = not (d is None or str(d).strip()=="")
-        admin_apply = not (e is None or str(e).strip()=="")
-
-        out.append({
-            "position": "" if b is None else str(b).strip(),
-            "name": name_n,
-            "learn_apply": learn_apply,
-            "admin_apply": admin_apply
-        })
-=======
         learn_apply = not (d is None or str(d).strip() == "")
         admin_apply = not (e is None or str(e).strip() == "")
 
@@ -1725,56 +1154,21 @@ def read_teacher_rows(
                 "admin_apply": admin_apply,
             }
         )
->>>>>>> 0f1c56e (20260227)
         row += 1
 
     return out
 
 
-<<<<<<< HEAD
-def normalize_withdraw_class(raw_class, grade_i: int) -> str:
-    if raw_class is None:
-        return ""
-    s = str(raw_class).strip()
-    if not s:
-        return ""
-
-    m = re.match(r"^\s*(\d+)\s*-\s*(.+?)\s*$", s)
-    if m:
-        g_in = int(m.group(1))
-        tail = m.group(2).strip()
-        if g_in == grade_i and tail:
-            return tail
-        if tail:
-            return tail
-
-    return s
-
-
-def read_withdraw_rows(xlsx_path: Path) -> List[Dict]:
-=======
 # 전출생 파일
 def read_withdraw_rows(
     xlsx_path: Path,
     header_row: Optional[int] = None,
     data_start_row: Optional[int] = None,
 ) -> List[Dict]:
->>>>>>> 0f1c56e (20260227)
     ensure_xlsx_only(xlsx_path)
     wb = safe_load_workbook(xlsx_path, data_only=True)
     ws = wb.worksheets[0]
 
-<<<<<<< HEAD
-    expected = ["no", "학년", "반", "성명", "비고"]
-    for col, exp in zip(["A","B","C","D","E"], expected):
-        v = ws[f"{col}2"].value
-        v = "" if v is None else re.sub(r"\s+","",str(v)).lower()
-        if v != re.sub(r"\s+","",exp).lower():
-            raise ValueError("[오류] 전출생 파일 헤더(2행 A~E)가 양식과 다릅니다.")
-
-    out = []
-    row = 5
-=======
     # 1) 헤더 자동 감지
     if header_row is None:
         header_row = detect_header_row_withdraw(ws)
@@ -1789,22 +1183,15 @@ def read_withdraw_rows(
 
     out = []
     row = data_start_row
->>>>>>> 0f1c56e (20260227)
     while True:
         grade = ws[f"B{row}"].value
         cls   = ws[f"C{row}"].value
         name  = ws[f"D{row}"].value
 
         vals = [grade, cls, name]
-<<<<<<< HEAD
-        if all(v is None or str(v).strip()=="" for v in vals):
-            break
-        if any(v is None or str(v).strip()=="" for v in vals):
-=======
         if all(v is None or str(v).strip() == "" for v in vals):
             break
         if any(v is None or str(v).strip() == "" for v in vals):
->>>>>>> 0f1c56e (20260227)
             raise ValueError(f"[오류] 전출생 파일 {row}행(B~D)에 빈 값이 있습니다.")
 
         grade_i = int(str(grade).strip())
@@ -1838,8 +1225,6 @@ def header_map(ws, header_row: int = 1):
     return mapping
 
 
-<<<<<<< HEAD
-=======
 
 def write_text_cell(ws, row: int, col: int, value: Any):
     """
@@ -1853,7 +1238,6 @@ def write_text_cell(ws, row: int, col: int, value: Any):
     return cell
 
 
->>>>>>> 0f1c56e (20260227)
 def find_last_data_row(ws, key_col: int, start_row: int) -> int:
     last = start_row - 1
     for r in range(start_row, ws.max_row + 1):
@@ -1882,14 +1266,6 @@ def delete_rows_below(ws, last_keep_row: int):
         ws.delete_rows(last_keep_row + 1, ws.max_row - last_keep_row)
 
 
-<<<<<<< HEAD
-# =========================
-# roster analyze
-# =========================
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
 def clear_format_workbook_from_row(wb, start_row: int = 2):
     """
     모든 시트에서:
@@ -1964,7 +1340,6 @@ def reset_view_to_a1(wb):
 # =========================
 # roster analyze
 # =========================
->>>>>>> 0f1c56e (20260227)
 def parse_roster_year_from_filename(roster_path: Path) -> Optional[int]:
     stem = roster_path.stem
     s = stem.replace("\u00A0", " ")
@@ -1981,17 +1356,6 @@ def parse_roster_year_from_filename(roster_path: Path) -> Optional[int]:
     return None
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-def load_roster_sheet(dirs: Dict[str, Path], school_name: str) -> Tuple[object, Path, Optional[int]]:
-    # 학생명부는 SCHOOL_ROOT/학교명 바로 아래에서 찾는다
-    roster_dir = dirs["SCHOOL_ROOT"] / school_name
-    if not roster_dir.exists():
-        raise ValueError(f"[오류] 학교 폴더가 없습니다: {roster_dir}")
-=======
 def load_roster_sheet(dirs: Dict[str, Path], school_name: str):
     """
     학생명부(.xlsx, 파일명에 '학생명부' 포함)를 학교 폴더에서 찾아서
@@ -2001,7 +1365,6 @@ def load_roster_sheet(dirs: Dict[str, Path], school_name: str):
     를 돌려준다.
     """
     root_dir = dirs["SCHOOL_ROOT"]
->>>>>>> 0f1c56e (20260227)
 
     kw = (school_name or "").strip()
     if not kw:
@@ -2039,82 +1402,9 @@ def load_roster_sheet(dirs: Dict[str, Path], school_name: str):
     if not candidates:
         raise ValueError("[오류] 학생명부(.xlsx, 파일명에 '학생명부') 파일을 찾지 못했습니다.")
 
-<<<<<<< HEAD
-    # 파일명 키워드로 판별: '학생명부' 포함 파일 1개여야 함
-<<<<<<< HEAD
-=======
-def parse_class_str(s: str) -> Optional[Tuple[int, str]]:
-    if s is None:
-        return None
-    m = re.match(r"^\s*(\d+)\s*-\s*(.+?)\s*$", str(s))
-    if not m:
-        return None
-    return int(m.group(1)), m.group(2).strip()
-
-
-def extract_id_prefix4(uid: str) -> Optional[int]:
-    if uid is None:
-        return None
-    s = str(uid).strip()
-    if len(s) >= 4 and s[:4].isdigit():
-        return int(s[:4])
-    return None
-
-
-def load_roster_sheet(dirs: Dict[str, Path], school_name: str) -> Tuple[object, Path, int]:
-    roster_dir = dirs["SCHOOL_ROOT"] / school_name / "student"
-    if not roster_dir.exists():
-        raise ValueError(f"[오류] 학생명부 폴더가 없습니다: {roster_dir}")
-
-    candidates = [p for p in roster_dir.glob("*.xlsx") if p.is_file() and not p.name.startswith("~$")]
-    if not candidates:
-        raise ValueError(f"[오류] 학생명부 폴더에 xlsx가 없습니다: {roster_dir}")
-
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-    named = [p for p in candidates if "학생명부" in p.name]
-    if len(named) == 1:
-        roster_path = named[0]
-    elif len(named) == 0:
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-        raise ValueError(
-            "[오류] 학생명부 파일을 찾지 못했습니다. (파일명에 '학생명부' 포함 필수)\n"
-            f"- 위치: {roster_dir}"
-        )
-    else:
-        raise ValueError(
-            f"[오류] '학생명부' 포함 파일이 2개 이상입니다. {[p.name for p in named]}"
-        )
-
-    roster_year = parse_roster_year_from_filename(roster_path)
-<<<<<<< HEAD
-=======
-        if len(candidates) == 1:
-            roster_path = candidates[0]
-        else:
-            raise ValueError(f"[오류] 학생명부로 추정할 파일이 여러 개입니다: {[p.name for p in candidates]}")
-    else:
-        raise ValueError(f"[오류] '학생명부' 포함 파일이 2개 이상입니다. 1개만 남겨주세요: {[p.name for p in named]}")
-
-    roster_year = parse_roster_year_from_filename(roster_path)
-    if roster_year is None:
-        raise ValueError(
-            "[오류] 학생명부 파일명에 학년도 정보(YYYY학년도)가 없습니다.\n"
-            f"- 파일: {roster_path.name}\n"
-            "파일명을 '2026학년도OO초_학생명부.xlsx' 처럼 수정해서 다시 넣어주세요."
-        )
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
     # 가장 최근 수정 파일 사용
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     roster_path = candidates[0]
->>>>>>> 0f1c56e (20260227)
 
     wb = safe_load_workbook(roster_path, data_only=True)
     ws = wb.worksheets[0]
@@ -2143,80 +1433,10 @@ def extract_id_prefix4(uid: str) -> Optional[int]:
 
 def analyze_roster_once(roster_ws, input_year: int) -> Dict:
     hm = header_map(roster_ws, 1)
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
     need = ["현재반", "이전반", "학생이름", "아이디"]
     for k in need:
         if k not in hm:
             raise ValueError(f"[오류] 학생명부에 '{k}' 헤더가 없습니다.")
->>>>>>> 0f1c56e (20260227)
-
-    c_class = hm["현재반"]
-    c_name  = hm["학생이름"]
-    c_id    = hm["아이디"]
-
-    prefixes_by_grade = defaultdict(list)
-    name_counter_by_grade = defaultdict(Counter)
-    prefixes_grade1 = []
-
-    for r in range(2, roster_ws.max_row + 1):
-        clv = roster_ws.cell(r, c_class).value
-        nmv = roster_ws.cell(r, c_name).value
-        idv = roster_ws.cell(r, c_id).value
-        if clv is None or nmv is None:
-            continue
-
-        parsed = parse_class_str(clv)
-        if parsed is None:
-            continue
-        g, _cls = parsed
-
-        nm = normalize_name(nmv)
-        if not nm:
-            continue
-        name_counter_by_grade[g][nm] += 1
-
-        p4 = extract_id_prefix4(idv)
-        if p4 is not None:
-            prefixes_by_grade[g].append(p4)
-            if g == 1:
-                prefixes_grade1.append(p4)
-
-    prefix_mode_by_grade = {}
-    for g, arr in prefixes_by_grade.items():
-        if arr:
-            prefix_mode_by_grade[g] = Counter(arr).most_common(1)[0][0]
-
-    roster_time = "unknown"
-    ref_shift = 0
-    if prefixes_grade1:
-        mode1 = Counter(prefixes_grade1).most_common(1)[0][0]
-        if mode1 == input_year:
-            roster_time = "this_year"
-            ref_shift = 0
-        elif mode1 == input_year - 1:
-            roster_time = "last_year"
-            ref_shift = -1
-        else:
-            roster_time = "unknown"
-            ref_shift = 0
-
-    return {
-        "roster_time": roster_time,
-<<<<<<< HEAD
-        "ref_grade_shift": ref_grade_shift,
-        "min_grade": min_grade,
-        "ref_prefix": ref_prefix,
-<<<<<<< HEAD
-=======
-    need = ["현재반", "학생이름", "아이디"]
-    for k in need:
-        if k not in hm:
-            raise ValueError(f"[오류] 학생명부에 '{k}' 헤더가 없습니다.")
 
     c_class = hm["현재반"]
     c_name  = hm["학생이름"]
@@ -2273,27 +1493,11 @@ def analyze_roster_once(roster_ws, input_year: int) -> Dict:
         "ref_grade_shift": ref_shift,
         "prefix_mode_by_roster_grade": prefix_mode_by_grade,
         "name_count_by_roster_grade": name_counter_by_grade,
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
-        "ref_grade_shift": ref_shift,
-        "prefix_mode_by_roster_grade": prefix_mode_by_grade,
-        "name_count_by_roster_grade": name_counter_by_grade,
->>>>>>> 0f1c56e (20260227)
     }
 
 
 # =========================
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-# Template helpers
-=======
 # transfer ids
->>>>>>> 0f1c56e (20260227)
 # =========================
 def build_transfer_ids(
     transfer_rows: List[Dict],
@@ -3440,730 +2644,6 @@ def render_mail_text(
     return txt
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-# transfer ids
-# =========================
-def build_transfer_ids(
-    transfer_rows: List[Dict],
-    roster_info: Dict,
-    input_year: int,
-) -> Tuple[List[Dict], List[Dict], Dict[int, int]]:
-    shift = roster_info["ref_grade_shift"]
-    prefix_mode = roster_info["prefix_mode_by_roster_grade"]
-    name_counts = roster_info["name_count_by_roster_grade"]
-
-    done: List[Dict] = []
-    hold: List[Dict] = []
-    final_prefix_by_current_grade: Dict[int, int] = {}
-    seen_in_transfer_by_grade = defaultdict(Counter)
-
-    grade1_rows = [tr for tr in transfer_rows if tr["grade"] == 1]
-    if grade1_rows:
-        g1_names = [tr["name"] for tr in grade1_rows]
-        g1_names_sfx = apply_suffix_for_duplicates(g1_names)
-        for tr, nm_sfx in zip(grade1_rows, g1_names_sfx):
-            uid = f"{input_year}{nm_sfx}"
-            done.append({**tr, "id": uid})
-
-    other_rows = [tr for tr in transfer_rows if tr["grade"] != 1]
-
-    for tr in other_rows:
-        g_cur = tr["grade"]
-        g_roster = g_cur + shift
-
-        pref = prefix_mode.get(g_roster)
-        if pref is None:
-            hold.append({**tr, "보류사유": f"명부 학년({g_roster})에서 ID prefix 최빈값 산출 불가"})
-            continue
-
-        final_prefix_by_current_grade[g_cur] = pref
-
-        nm = tr["name"]
-        base_cnt = name_counts.get(g_roster, Counter()).get(nm, 0)
-
-        seen_in_transfer_by_grade[g_cur][nm] += 1
-        add_seq = seen_in_transfer_by_grade[g_cur][nm]
-
-        need_suffix = (base_cnt > 0)
-        suffix = dedup_suffix_letters(add_seq) if need_suffix else ""
-
-        uid = f"{pref}{nm}{suffix}"
-        done.append({**tr, "id": uid})
-
-    def _safe_int(x: str):
-        try: return (0, int(x))
-        except: return (1, str(x))
-
-    done.sort(key=lambda r: (r["grade"], _safe_int(r["class"]), _safe_int(r["number"]), r["name"]))
-    hold.sort(key=lambda r: (r["grade"], _safe_int(r["class"]), _safe_int(r["number"]), r["name"]))
-
-    return done, hold, final_prefix_by_current_grade
-
-
-# =========================
-# withdraw outputs
-# =========================
-def build_withdraw_outputs(
-    roster_ws,
-    withdraw_rows: List[Dict],
-    year_int: int,
-    school_start_date: date,
-) -> Tuple[List[Dict], List[Dict]]:
-    hm = header_map(roster_ws, 1)
-    need = ["현재반", "이전반", "학생이름", "아이디"]
-    for k in need:
-        if k not in hm:
-            raise ValueError(f"[오류] 학생명부에 '{k}' 헤더가 없습니다.")
-
-    col_now   = hm["현재반"]
-    col_prev  = hm["이전반"]
-    col_name  = hm["학생이름"]
-    col_id    = hm["아이디"]
-
-    done: List[Dict] = []
-    hold: List[Dict] = []
-
-    today = date.today()
-    eff = school_start_date if today < school_start_date else today
-
-    roster_map: Dict[str, List[Dict]] = {}
-    roster_by_grade_name: Dict[str, List[Dict]] = {}
-
-    def _index_one(class_val, name_key: str, idv, name_disp: str):
-        if class_val is None:
-            return
-        c = str(class_val).strip()
-        if not c:
-            return
-
-        key1 = f"{c}|{name_key}"
-        roster_map.setdefault(key1, []).append({
-            "class": c,
-            "name_key": name_key,
-            "name_disp": name_disp,
-            "id": "" if idv is None else str(idv).strip()
-        })
-
-        parsed = parse_class_str(c)
-        if parsed is None:
-            return
-        g = parsed[0]
-        key2 = f"{g}|{name_key}"
-        roster_by_grade_name.setdefault(key2, []).append({
-            "class": c,
-            "name_key": name_key,
-            "name_disp": name_disp,
-            "id": "" if idv is None else str(idv).strip(),
-            "grade": g
-        })
-
-    for r in range(2, roster_ws.max_row + 1):
-        nmv = roster_ws.cell(r, col_name).value
-        if nmv is None:
-            continue
-        name_disp = normalize_name(nmv)
-        name_key  = normalize_name_key(nmv)
-        if not name_key:
-            continue
-
-        idv = roster_ws.cell(r, col_id).value
-        nowv  = roster_ws.cell(r, col_now).value
-        prevv = roster_ws.cell(r, col_prev).value
-
-        _index_one(nowv,  name_key, idv, name_disp)
-        _index_one(prevv, name_key, idv, name_disp)
-
-    for w in withdraw_rows:
-        g_cur = w["grade"]
-        w_name_disp = w["name"]
-        w_name_key  = normalize_name_key(w_name_disp)
-        if not w_name_key:
-            hold.append({"학년": g_cur, "반": w["class"], "성명": w_name_disp, "보류사유": "성명 정규화(키) 결과가 비어 있음"})
-            continue
-
-        w_class_full = f"{g_cur}-{w['class']}"
-        key = f"{w_class_full}|{w_name_key}"
-        matches = roster_map.get(key, [])
-
-        if len(matches) == 0:
-            cand0 = roster_by_grade_name.get(f"{g_cur}|{w_name_key}", [])
-            cand1 = roster_by_grade_name.get(f"{g_cur+1}|{w_name_key}", [])
-            cand = cand0 + cand1
-            if len(cand) == 1:
-                matches = cand
-            else:
-                reason = "학년+이름 백업 실패(0건)" if len(cand) == 0 else f"학년+이름 후보가 2건 이상({len(cand)}건)"
-                hold.append({"학년": g_cur, "반": w["class"], "성명": w_name_disp, "보류사유": f"반 매칭 실패 + {reason} (g 또는 g+1 탐색)"})
-                continue
-
-        if len(matches) > 1:
-            hold.append({"학년": g_cur, "반": w["class"], "성명": w_name_disp, "보류사유": f"중복 매칭({len(matches)}건)"})
-            continue
-
-        m = matches[0]
-        g_server = m.get("grade")
-        if g_server is None:
-            parsed = parse_class_str(m.get("class", ""))
-            g_server = parsed[0] if parsed else g_cur
-
-        withdraw_class = f"{g_server}-미편성반"
-        done.append({"퇴원반명": withdraw_class, "학생이름": w_name_disp, "아이디": m["id"], "퇴원일자": eff})
-
-    return done, hold
-
-
-def write_withdraw_to_register(wb, done_rows: List[Dict], hold_rows: List[Dict]):
-    ws_done = wb["퇴원"] if "퇴원" in wb.sheetnames else wb.create_sheet("퇴원")
-    ws_hold = wb["퇴원_보류"] if "퇴원_보류" in wb.sheetnames else wb.create_sheet("퇴원_보류")
-
-    clear_sheet_rows(ws_done, 2)
-    clear_sheet_rows(ws_hold, 2)
-
-    r = 2
-    for row in done_rows:
-        ws_done.cell(r, 1).value = row["퇴원반명"]
-        ws_done.cell(r, 2).value = row["학생이름"]
-        ws_done.cell(r, 3).value = row["아이디"]
-        ws_done.cell(r, 4).value = row["퇴원일자"]
-        ws_done.cell(r, 4).number_format = "yyyy-mm-dd"
-        r += 1
-
-    r = 2
-    for row in hold_rows:
-        ws_hold.cell(r, 1).value = row["학년"]
-        ws_hold.cell(r, 2).value = row["반"]
-        ws_hold.cell(r, 3).value = row["성명"]
-        ws_hold.cell(r, 4).value = row["보류사유"]
-        r += 1
-
-    move_sheet_after(wb, "퇴원_보류", "퇴원")
-
-
-# =========================
-# register fill (rebuild)
-# =========================
-def school_kind_from_name(school_name: str) -> Tuple[str, str]:
-    s = (school_name or "").strip()
-    if not s:
-        return "", ""
-    last = s[-1]
-    if last == "초":
-        return "초등부", "초"
-    if last == "중":
-        return "중등부", "중"
-    if last == "고":
-        return "고등부", "고"
-    return "", ""
-
-
-def write_transfer_hold_sheet(wb, hold_rows: List[Dict]):
-    sheet_name = "전입생_보류"
-    ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.create_sheet(sheet_name)
-
-    ws.delete_rows(1, ws.max_row)
-
-    ws["A1"].value = "학년"
-    ws["B1"].value = "반"
-    ws["C1"].value = "번호"
-    ws["D1"].value = "성명"
-    ws["E1"].value = "보류사유"
-
-    r = 2
-    for row in hold_rows:
-        ws.cell(r, 1).value = row.get("grade", "")
-        ws.cell(r, 2).value = row.get("class", "")
-        ws.cell(r, 3).value = row.get("number", "")
-        ws.cell(r, 4).value = row.get("name", "")
-        ws.cell(r, 5).value = row.get("보류사유", "")
-        r += 1
-
-
-def fill_register(
-    template_path: Path,
-    out_path: Path,
-    school_name: str,
-    year: str,
-    freshmen_rows: List[Dict],
-    transfer_done_rows: List[Dict],
-    teacher_rows: List[Dict],
-    transfer_hold_rows: Optional[List[Dict]] = None,
-    withdraw_done_rows: Optional[List[Dict]] = None,
-    withdraw_hold_rows: Optional[List[Dict]] = None,
-) -> None:
-    ensure_xlsx_only(template_path)
-
-    wb = load_workbook(template_path)
-    ws_students = wb["학생자료"]
-    ws_staff = wb["직원정보"]
-    ws_groups = wb["그룹반정보"]
-
-    hm = header_map(ws_students, 1)
-    need = ["No", "학생이름", "ID", "학교구분", "학교", "학년", "수강반"]
-    for k in need:
-        if k not in hm:
-            raise ValueError(f"[오류] 템플릿 [학생자료]에 '{k}' 헤더가 없습니다.")
-
-    col_no = hm["No"]
-    col_name = hm["학생이름"]
-    col_id = hm["ID"]
-    col_kind = hm["학교구분"]
-    col_school = hm["학교"]
-    col_grade = hm["학년"]
-    col_class = hm["수강반"]
-
-    for r in range(2, ws_students.max_row + 1):
-        for c in [col_no, col_name, col_id, col_kind, col_school, col_grade, col_class]:
-            ws_students.cell(row=r, column=c).value = None
-
-    kind_full, kind_prefix = school_kind_from_name(school_name)
-
-    def write_student_row(r: int, no: int, name: str, uid: str, grade_i: int, cls_name: str):
-        ws_students.cell(r, col_no).value = no
-        ws_students.cell(r, col_name).value = name
-        ws_students.cell(r, col_id).value = uid
-        ws_students.cell(r, col_kind).value = kind_full if kind_full else ""
-        ws_students.cell(r, col_school).value = school_name
-        ws_students.cell(r, col_grade).value = f"{kind_prefix}{grade_i}" if kind_prefix else ""
-        ws_students.cell(r, col_class).value = cls_name
-
-    write_row = 2
-    running_no = 1
-
-    fn_names = [r["name"] for r in freshmen_rows]
-    fn_names_sfx = apply_suffix_for_duplicates(fn_names)
-    fn_ids = [f"{year}{nm}" for nm in fn_names_sfx]
-
-    for i, fr in enumerate(freshmen_rows):
-        r = write_row + i
-        write_student_row(
-            r=r,
-            no=running_no,
-            name=fr["name"],
-            uid=fn_ids[i],
-            grade_i=fr["grade"],
-            cls_name=f"{fr['grade']}-{fr['class']}",
-        )
-        running_no += 1
-    write_row += len(freshmen_rows)
-
-    for tr in transfer_done_rows:
-        r = write_row
-        write_student_row(
-            r=r,
-            no=running_no,
-            name=tr["name"],
-            uid=tr["id"],
-            grade_i=tr["grade"],
-            cls_name=f"{tr['grade']}-{tr['class']}",
-        )
-        running_no += 1
-        write_row += 1
-
-    teachers_learn = [t for t in teacher_rows if t["learn_apply"]]
-    t_names = [t["name"] for t in teachers_learn]
-    t_names_sfx = apply_suffix_for_duplicates(t_names)
-    t_ids = [f"{nm}1" for nm in t_names_sfx]
-
-    for j, t in enumerate(teachers_learn):
-        r = write_row + j
-        write_student_row(
-            r=r,
-            no=running_no,
-            name=t["name"],
-            uid=t_ids[j],
-            grade_i=1,
-            cls_name="선생님반",
-        )
-        running_no += 1
-    write_row += len(teachers_learn)
-
-    hm2 = header_map(ws_staff, 1)
-    hm2_lower = {k.lower(): v for k, v in hm2.items()}
-
-    need2 = ["no", "이름", "아이디", "권한부여"]
-    for k in need2:
-        if k.lower() not in hm2_lower:
-            raise ValueError(f"[오류] 템플릿 [직원정보]에 '{k}' 헤더가 없습니다.")
-
-    col_s_no = hm2_lower["no"]
-    col_s_name = hm2_lower["이름"]
-    col_s_id = hm2_lower["아이디"]
-    col_s_role = hm2_lower["권한부여"]
-
-    for r in range(2, ws_staff.max_row + 1):
-        for c in [col_s_no, col_s_name, col_s_id, col_s_role]:
-            ws_staff.cell(row=r, column=c).value = None
-
-    teachers_admin = [t for t in teacher_rows if t["admin_apply"]]
-    a_names = [t["name"] for t in teachers_admin]
-    a_names_sfx = apply_suffix_for_duplicates(a_names)
-
-    staff_write = 2
-    for i, t in enumerate(teachers_admin):
-        r = staff_write + i
-        ws_staff.cell(r, col_s_no).value = i + 1
-        ws_staff.cell(r, col_s_name).value = t["name"]
-        ws_staff.cell(r, col_s_id).value = a_names_sfx[i]
-        ws_staff.cell(r, col_s_role).value = "선생님"
-
-    hm_g = header_map(ws_groups, 1)
-    need_g = ["그룹명", "반명", "수강료", "담임명", "FullMode"]
-    for k in need_g:
-        if k not in hm_g:
-            raise ValueError(f"[오류] 템플릿 [그룹반정보]에 '{k}' 헤더가 없습니다.")
-
-    col_g_group = hm_g["그룹명"]
-    col_g_class = hm_g["반명"]
-    col_g_fee = hm_g["수강료"]
-    col_g_teacher = hm_g["담임명"]
-    col_g_full = hm_g["FullMode"]
-
-    for r in range(2, ws_groups.max_row + 1):
-        for c in [col_g_group, col_g_class, col_g_fee, col_g_teacher, col_g_full]:
-            ws_groups.cell(row=r, column=c).value = None
-
-    class_set = set()
-    last_student_row = find_last_data_row(ws_students, key_col=col_no, start_row=2)
-    for r in range(2, last_student_row + 1):
-        v = ws_students.cell(row=r, column=col_class).value
-        if v is None:
-            continue
-        s = str(v).strip()
-        if s:
-            class_set.add(s)
-
-    def parse_grade_prefix(class_name: str):
-        m = re.match(r"^\s*(\d+)\s*-\s*(.+)\s*$", str(class_name))
-        if not m:
-            return None
-        return int(m.group(1))
-
-    def group_name_from_class(class_name: str) -> str:
-        if class_name == "선생님반":
-            return "기타그룹"
-        g = parse_grade_prefix(class_name)
-        if g is None:
-            return "기타그룹"
-        return f"{g}학년"
-
-    def class_sort_key(class_name: str):
-        if class_name == "선생님반":
-            return (2, 0, "zzz")
-        g = parse_grade_prefix(class_name)
-        if g is None:
-            return (1, 0, str(class_name))
-        return (0, g, str(class_name))
-
-    class_list = sorted(class_set, key=class_sort_key)
-
-    start_r = 2
-    for i, cls_name in enumerate(class_list):
-        r = start_r + i
-        ws_groups.cell(r, col_g_group).value = group_name_from_class(cls_name)
-        ws_groups.cell(r, col_g_class).value = cls_name
-        ws_groups.cell(r, col_g_fee).value = None
-        ws_groups.cell(r, col_g_teacher).value = "선생님"
-        ws_groups.cell(r, col_g_full).value = "Y"
-
-    if transfer_hold_rows:
-        write_transfer_hold_sheet(wb, transfer_hold_rows)
-
-    if (withdraw_done_rows is not None) and (withdraw_hold_rows is not None):
-        write_withdraw_to_register(wb, withdraw_done_rows, withdraw_hold_rows)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_if_exists(out_path)
-    wb.save(out_path)
-
-
-# =========================
-# NOTICE FILE (ID/PW 안내) 생성
-# =========================
-FILL_TRANSFER = PatternFill("solid", fgColor="F8CBAD")  # 옅은 주황(엑셀 기본 계열)
-FILL_DUP      = PatternFill("solid", fgColor="FFD966")  # 선명 노랑
-FILL_GREY     = PatternFill("solid", fgColor="D9D9D9")  # 회색
-
-
-def _is_duplicate_id(uid: str) -> bool:
-    if uid is None:
-        return False
-    s = str(uid).strip()
-    if not s:
-        return False
-    # 동명이인: 아이디 끝이 대문자 A~Z (A, B, ..., AA 등)
-    return bool(re.search(r"[A-Z]+$", s))
-
-
-def _parse_grade_class_from_register(class_str: str) -> Tuple[Optional[int], str]:
-    """
-    register의 수강반: "1-3" 같은 형태 → (1, "3")
-    실패하면 (None, 원본)
-    """
-    if class_str is None:
-        return None, ""
-    s = str(class_str).strip()
-    if not s:
-        return None, ""
-    m = re.match(r"^\s*(\d+)\s*-\s*(.+?)\s*$", s)
-    if not m:
-        return None, s
-    return int(m.group(1)), m.group(2).strip()
-
-
-def build_notice_student_sheet(
-    ws_notice,
-    register_students_ws,
-    transfer_ids: set,
-):
-    """
-    안내파일 - 학생 ID,PW(학습용)
-    헤더 3행: No., 학년, 반, 학생이름, ID, PW
-    데이터 4행부터
-    """
-    # register 학생자료
-    hm_r = header_map(register_students_ws, 1)
-    need_r = ["No", "학생이름", "ID", "수강반"]
-    for k in need_r:
-        if k not in hm_r:
-            raise ValueError(f"[오류] 등록작업파일 [학생자료]에 '{k}' 헤더가 없습니다.")
-    c_r_name = hm_r["학생이름"]
-    c_r_id   = hm_r["ID"]
-    c_r_cls  = hm_r["수강반"]
-    c_r_no   = hm_r["No"]
-
-    # notice 학생 시트 고정 컬럼 (A~F)
-    header_row = 3
-    start_row = 4
-    # 간단 검증(필수 아님)
-    # A3: No. / B3: 학년 / C3: 반 / D3: 학생이름 / E3: ID / F3: PW
-
-    out_rows: List[Dict[str, Any]] = []
-    last_r = find_last_data_row(register_students_ws, key_col=c_r_no, start_row=2)
-    for r in range(2, last_r + 1):
-        nm = register_students_ws.cell(r, c_r_name).value
-        uid = register_students_ws.cell(r, c_r_id).value
-        cls = register_students_ws.cell(r, c_r_cls).value
-        if (nm is None or str(nm).strip() == "") and (uid is None or str(uid).strip() == ""):
-            continue
-        nm_s = "" if nm is None else str(nm).strip()
-        uid_s = "" if uid is None else str(uid).strip()
-        if not uid_s:
-            continue
-
-        g, cls_only = _parse_grade_class_from_register(cls)
-        if g is None:
-            # 혹시 학년 표기를 못 얻으면 skip하지 말고 빈값으로 둠
-            g_disp = ""
-            cls_disp = "" if cls is None else str(cls).strip()
-        else:
-            g_disp = g
-            cls_disp = cls_only
-
-        out_rows.append({
-            "name": nm_s,
-            "id": uid_s,
-            "grade": g_disp,
-            "class": cls_disp,
-            "is_transfer": (uid_s in transfer_ids),
-            "is_dup": _is_duplicate_id(uid_s),
-        })
-
-    # 시트 클리어: 기존 데이터(4행~) 삭제 후 다시 씀
-    delete_rows_below(ws_notice, header_row)
-
-    r_out = start_row
-    no = 1
-    for item in out_rows:
-        ws_notice.cell(r_out, 1).value = no
-        ws_notice.cell(r_out, 2).value = item["grade"]
-        ws_notice.cell(r_out, 3).value = item["class"]
-        ws_notice.cell(r_out, 4).value = item["name"]
-        ws_notice.cell(r_out, 5).value = item["id"]
-        ws_notice.cell(r_out, 6).value = "1234" if item["id"] else ""
-
-        # 색칠(우선순위: 동명이인 노랑 > 전입 주황)
-        fill = None
-        if item["is_dup"]:
-            fill = FILL_DUP
-        elif item["is_transfer"]:
-            fill = FILL_TRANSFER
-
-        if fill is not None:
-            for c in range(1, 7):
-                ws_notice.cell(r_out, c).fill = fill
-
-        no += 1
-        r_out += 1
-
-    # 빈 서식행 삭제: 마지막 데이터 행 아래는 삭제
-    delete_rows_below(ws_notice, r_out - 1)
-
-
-def build_notice_teacher_sheet(
-    ws_notice,
-    teacher_rows: List[Dict],
-):
-    """
-    안내파일 - 선생님ID,PW(관리용,학습용)
-    헤더 3행, 데이터 4행부터.
-    - No, 직위, 선생님이름: teacher_rows의 position/name 그대로
-    - 관리용ID: admin_apply True → name, PW는 t1234
-    - 학습용ID: learn_apply True → name+'1', PW는 1234
-    - 신청 안 한 칸은 회색 처리(관리용 영역, 학습용 영역)
-    - 빈 행부터는 삭제
-    """
-    header_row = 3
-    start_row = 4
-
-    # 시트 클리어(4행~)
-    delete_rows_below(ws_notice, header_row)
-
-    r_out = start_row
-    no = 1
-    for t in teacher_rows:
-        pos = "" if t.get("position") is None else str(t.get("position")).strip()
-        nm  = "" if t.get("name") is None else str(t.get("name")).strip()
-        if not nm and not pos and (not t.get("learn_apply")) and (not t.get("admin_apply")):
-            continue
-
-        admin_apply = bool(t.get("admin_apply"))
-        learn_apply = bool(t.get("learn_apply"))
-
-        admin_id = nm if admin_apply else ""
-        admin_pw = "t1234" if admin_id else ""
-
-        learn_id = f"{nm}1" if learn_apply else ""
-        learn_pw = "1234" if learn_id else ""
-
-        # 고정 컬럼(A~G)
-        ws_notice.cell(r_out, 1).value = no
-        ws_notice.cell(r_out, 2).value = pos
-        ws_notice.cell(r_out, 3).value = nm
-        ws_notice.cell(r_out, 4).value = admin_id
-        ws_notice.cell(r_out, 5).value = admin_pw
-        ws_notice.cell(r_out, 6).value = learn_id
-        ws_notice.cell(r_out, 7).value = learn_pw
-
-        # 회색 처리(신청 안 한 영역)
-        if not admin_apply:
-            for c in [4, 5]:
-                ws_notice.cell(r_out, c).fill = FILL_GREY
-        if not learn_apply:
-            for c in [6, 7]:
-                ws_notice.cell(r_out, c).fill = FILL_GREY
-
-        no += 1
-        r_out += 1
-
-    delete_rows_below(ws_notice, r_out - 1)
-
-
-def build_notice_file(
-    template_notice_path: Path,
-    out_notice_path: Path,
-    out_register_path: Path,
-    teacher_file_path: Optional[Path],
-    transfer_done_rows: List[Dict],
-) -> None:
-    ensure_xlsx_only(template_notice_path)
-    ensure_xlsx_only(out_register_path)
-
-    wb_notice = load_workbook(template_notice_path)
-    wb_reg = load_workbook(out_register_path)
-
-    # 학생자료
-    if "학생자료" not in wb_reg.sheetnames:
-        raise ValueError("[오류] 등록작업파일에 '학생자료' 시트가 없습니다.")
-    ws_reg_students = wb_reg["학생자료"]
-
-    # 안내 학생/교사 시트
-    sh_student = "학생 ID,PW(학습용)"
-    sh_teacher = "선생님ID,PW(관리용,학습용)"
-    if sh_student not in wb_notice.sheetnames:
-        raise ValueError(f"[오류] 안내 템플릿에 '{sh_student}' 시트가 없습니다.")
-    if sh_teacher not in wb_notice.sheetnames:
-        raise ValueError(f"[오류] 안내 템플릿에 '{sh_teacher}' 시트가 없습니다.")
-
-    ws_notice_students = wb_notice[sh_student]
-    ws_notice_teachers = wb_notice[sh_teacher]
-
-    # 전입생 ID set (색칠용)
-    transfer_ids = set()
-    for tr in transfer_done_rows:
-        uid = tr.get("id")
-        if uid:
-            transfer_ids.add(str(uid).strip())
-
-    # 학생 시트 채움
-    build_notice_student_sheet(
-        ws_notice=ws_notice_students,
-        register_students_ws=ws_reg_students,
-        transfer_ids=transfer_ids,
-    )
-
-    # 교사 시트 채움(교사 신청 파일 기반)
-    teacher_rows = read_teacher_rows(teacher_file_path) if teacher_file_path else []
-    build_notice_teacher_sheet(
-        ws_notice=ws_notice_teachers,
-        teacher_rows=teacher_rows,
-    )
-
-    out_notice_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_if_exists(out_notice_path)
-    wb_notice.save(out_notice_path)
-
-
-# =========================
-# MAIL TEMPLATE (텍스트 치환)
-# =========================
-def render_mail_text(
-    mail_template_text: str,
-    school_name: str,
-    domain: str,
-) -> str:
-    """
-    텍스트 파일 내부:
-    - 'OO초' 같은 표현 → school_name
-    - 'OOOOO.readinggate.com' → domain
-    아주 단순 치환(전역 replace)
-    """
-    txt = mail_template_text or ""
-    if school_name:
-        txt = txt.replace("OO초", school_name).replace("OO중", school_name).replace("OO고", school_name)
-    if domain:
-        txt = re.sub(r"[A-Za-z0-9\-]+\.readinggate\.com", domain, txt)
-    return txt
-
-
-def load_mail_template_text(project_root: Path) -> Optional[str]:
-    """
-    기본 위치: data/format 안에서 '메일' '문자' '내용' 같은 키워드 포함 txt 1개를 찾는다.
-    없으면 None
-    """
-    dirs = get_project_dirs(work_root)
-    fmt = dirs["FORMAT"]
-    if not fmt.exists():
-        return None
-
-    cands = []
-    for p in fmt.glob("*.txt"):
-        if not p.is_file():
-            continue
-        nm = p.name
-        if ("메일" in nm or "문자" in nm) and ("내용" in nm):
-            cands.append(p)
-
-    if not cands:
-        return None
-
-    cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    try:
-        return cands[0].read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return cands[0].read_text(encoding="utf-8-sig")
-=======
 def load_notice_templates(work_root: Path) -> dict[str, str]:
     dirs = get_project_dirs(work_root)
     notice_dir = dirs["NOTICES"]
@@ -4184,7 +2664,6 @@ def load_notice_templates(work_root: Path) -> dict[str, str]:
         result[p.stem.strip()] = text.strip()
 
     return result
->>>>>>> 0f1c56e (20260227)
 
 
 def domain_missing_message(school_name: str) -> str:
@@ -4196,12 +2675,6 @@ def domain_missing_message(school_name: str) -> str:
 # =========================
 # NEW: SCAN (pre-check)
 # =========================
-<<<<<<< HEAD
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
->>>>>>> 0f1c56e (20260227)
 def scan_pipeline(
     work_root: Path,
     school_name: str,
@@ -4257,18 +2730,6 @@ def scan_pipeline(
         sr.db_path = db_path
         log(f"[OK] DB 검증 통과 | 사용 파일: {db_path.name}")
 
-<<<<<<< HEAD
-        school_dir = dirs["SCHOOL_ROOT"] / school_name
-<<<<<<< HEAD
-<<<<<<< HEAD
-        input_dir = school_dir / "input"
-=======
-        input_dir = school_dir
->>>>>>> f3aadff (Initial commit)
-=======
-        input_dir = school_dir / "input"
->>>>>>> 9bb7b8e (Add files via upload)
-=======
         # 🔹 학교 폴더: 선택한 학교명이 포함된 폴더 찾기 (정규화 포함 매칭)
         root_dir = dirs["SCHOOL_ROOT"]
 
@@ -4299,7 +2760,6 @@ def scan_pipeline(
         log(f"[OK] 학교 폴더 매칭: {school_dir.name}")
 
         input_dir = school_dir
->>>>>>> 0f1c56e (20260227)
         output_dir = school_dir / "작업"
 
         sr.input_dir = input_dir
@@ -4314,22 +2774,7 @@ def scan_pipeline(
 
         # 👉 신입생 파일은 이제 "필수" 아님. None 허용.
         freshmen_file = find_single_input_file(input_dir, FRESHMEN_KEYWORDS)
-<<<<<<< HEAD
-        if freshmen_file is None:
-            raise ValueError("[오류] xlsx 형식의 신입생 명단 파일을 찾지 못했습니다. (키워드: 신입생/신입)")
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-        teacher_file = find_single_input_file(input_dir, TEACHER_KEYWORDS)
-=======
         teacher_file  = find_single_input_file(input_dir, TEACHER_KEYWORDS)
->>>>>>> f3aadff (Initial commit)
-=======
-        teacher_file = find_single_input_file(input_dir, TEACHER_KEYWORDS)
->>>>>>> 9bb7b8e (Add files via upload)
-=======
-        teacher_file  = find_single_input_file(input_dir, TEACHER_KEYWORDS)
->>>>>>> 0f1c56e (20260227)
         transfer_file = find_single_input_file(input_dir, TRANSFER_KEYWORDS)
         withdraw_file = find_single_input_file(input_dir, WITHDRAW_KEYWORDS)
 
@@ -4365,16 +2810,7 @@ def scan_pipeline(
             roster_ws, roster_path, roster_year = load_roster_sheet(dirs, school_name)
             sr.roster_path = roster_path
             sr.roster_year = roster_year
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-            if roster_year is not None:
-                log(f"[OK] 학생명부: {roster_path.name} | 학년도: {roster_year}")
-=======
             log(f"[OK] 학생명부: {roster_path.name}")
->>>>>>> 0f1c56e (20260227)
 
             try:
                 modified_date = datetime.fromtimestamp(roster_path.stat().st_mtime).date()
@@ -4395,24 +2831,6 @@ def scan_pipeline(
                         f"[INFO] 학생명부 마지막 수정일({auto_basis.isoformat()})을 "
                         "명부 기준일로 자동 감지했습니다."
                     )
-<<<<<<< HEAD
-            else:
-                log(f"[OK] 학생명부: {roster_path.name} | 학년도 정보 없음(파일명 기준)")
-<<<<<<< HEAD
-=======
-            log(f"[OK] 학생명부: {roster_path.name} | 학년도: {roster_year}")
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-
-            roster_info = analyze_roster_once(roster_ws, input_year=year_int)
-            sr.roster_info = roster_info
-            log(f"[OK] 명부 판정: {roster_info['roster_time']} (shift={roster_info['ref_grade_shift']})")
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
 
                 # 3) 작업일과 다른 경우 참고용 안내
                 if sr.roster_basis_date != work_date:
@@ -4420,7 +2838,6 @@ def scan_pipeline(
                         "[INFO] 현재 작업일과 명부 기준일이 다릅니다. "
                         f"(작업일={work_date.isoformat()}, 명부 기준일={sr.roster_basis_date.isoformat()})"
                     )
->>>>>>> 0f1c56e (20260227)
 
             except Exception as e:
                 log(f"[WARN] 학생명부 파일 수정일 조회 중 오류: {e}")
@@ -4436,13 +2853,6 @@ def scan_pipeline(
                     f"[INFO] 학생명부 분석 결과: roster_time={rt}, ref_grade_shift={shift} "
                     "(ID prefix 기반 판정)"
                 )
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
             except Exception as e:
                 log(f"[WARN] 학생명부 분석(analyze_roster_once) 중 오류: {e}")
                 sr.roster_info = None
@@ -4493,7 +2903,6 @@ def scan_pipeline(
                     )
             except Exception as e:
                 log(f"[WARN] 학생명부 학년도/ID 패턴 추정 중 오류가 발생했습니다: {e}")
->>>>>>> 0f1c56e (20260227)
         else:
             log("[SKIP] 전입/전출 파일이 없어 학생명부 로드를 스킵")
 
@@ -4504,19 +2913,11 @@ def scan_pipeline(
         else:
             log("[INFO] 개학일 입력 불필요")
 
-<<<<<<< HEAD
-        base_ok = True
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
         # -------------------------
         # 3-3 실행 가능 여부 플래그 정리
         # -------------------------
         missing_fields: List[str] = []
 
->>>>>>> 0f1c56e (20260227)
         if sr.db_path is None:
             missing_fields.append("DB 파일")
         if sr.template_register is None:
@@ -4585,43 +2986,7 @@ def execute_pipeline(
     scan: ScanResult,
     work_date: date,
     school_start_date: Optional[date] = None,
-<<<<<<< HEAD
-    layout_overrides: Optional[Dict[str, Dict[str, int]]] = None,
-<<<<<<< HEAD
-=======
-        if sr.db_path is None: base_ok = False
-        if sr.template_register is None: base_ok = False
-        if sr.template_notice is None: base_ok = False
-        if sr.freshmen_file is None: base_ok = False
-        if need_roster and (sr.roster_path is None or sr.roster_info is None): base_ok = False
-
-        sr.can_execute_after_input = base_ok
-        sr.can_execute = base_ok and (len(sr.missing_fields) == 0)
-
-        sr.ok = True
-        log("[DONE] 스캔 완료")
-        return sr
-
-    except Exception as e:
-        log(f"[ERROR] {e}")
-        sr.ok = False
-        sr.can_execute = False
-        sr.can_execute_after_input = False
-        return sr
-
-
-# =========================
-# EXECUTE: FULL REBUILD
-# =========================
-def execute_pipeline(
-    scan: ScanResult,
-    school_start_date: Optional[date] = None,
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
     layout_overrides: Optional[Dict[str, int]] = None,
->>>>>>> 0f1c56e (20260227)
 ) -> PipelineResult:
     """
     scan 결과를 기반으로 등록파일 + 안내파일을 한 번에 생성.
@@ -4635,10 +3000,6 @@ def execute_pipeline(
     def log(msg: str):
         logs.append(msg)
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
     layout_overrides = layout_overrides or {}
 
     try:
@@ -4680,32 +3041,6 @@ def execute_pipeline(
         else:
             log("[INFO] 신입생 파일 없음 → 신입생 등록은 스킵합니다.")
 
-<<<<<<< HEAD
-        # 3) 전출 파일이 있고 개학일이 안 온 경우만 막기
-        if getattr(scan, "needs_open_date", False) and school_start_date is None:
-<<<<<<< HEAD
-=======
-    try:
-        if not scan.ok:
-            raise ValueError("[오류] 스캔 결과가 ok=False 입니다. 스캔을 먼저 통과해야 실행할 수 있습니다.")
-
-        school_name = scan.school_name
-        year_str = scan.year_str
-        year_int = scan.year_int
-
-        if scan.freshmen_file is None:
-            raise ValueError("[오류] 신입생 파일 경로가 없습니다(스캔 결과 이상).")
-        if scan.template_register is None:
-            raise ValueError("[오류] 등록 템플릿 경로가 없습니다(스캔 결과 이상).")
-        if scan.template_notice is None:
-            raise ValueError("[오류] 안내 템플릿 경로가 없습니다(스캔 결과 이상).")
-
-        if scan.needs_open_date and school_start_date is None:
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-            raise ValueError("[오류] 전출생 파일이 있어 개학일이 필요하지만 입력되지 않았습니다.")
-=======
         # 교사
         if teacher_path:
             t_header, t_start = _extract_layout(layout_overrides, "teacher", default_header=3)
@@ -4722,7 +3057,6 @@ def execute_pipeline(
         else:
             teacher_rows = []
             log("[INFO] 교사 파일 없음 → 교사 관련 처리는 스킵")
->>>>>>> 0f1c56e (20260227)
 
         # 전입
         if transfer_path:
@@ -4758,76 +3092,6 @@ def execute_pipeline(
             withdraw_rows = []
             log("[INFO] 전출생 파일 없음 → 전출 처리 스킵")
 
-<<<<<<< HEAD
-        roster_ws = None
-        roster_info = scan.roster_info
-        if scan.need_roster:
-            if scan.roster_path is None:
-<<<<<<< HEAD
-<<<<<<< HEAD
-                raise ValueError("[오류] 전입/전출 파일이 존재하는 경우 학생명부가 필요합니다.")
-=======
-                raise ValueError("[오류] 전입/전출이 있는데 학생명부 경로가 없습니다(스캔 결과 이상).")
->>>>>>> f3aadff (Initial commit)
-=======
-                raise ValueError("[오류] 전입/전출 파일이 존재하는 경우 학생명부가 필요합니다.")
->>>>>>> 9bb7b8e (Add files via upload)
-            wb = safe_load_workbook(scan.roster_path, data_only=True)
-            roster_ws = wb.worksheets[0]
-            log(f"[OK] 학생명부 재로드: {scan.roster_path.name}")
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-        # ✅ 여기서부터 파일별 행 번호 override 적용
-        fo = layout_overrides.get("freshmen", {})   # {"data_start_row": ...}
-        to = layout_overrides.get("teacher", {})
-        tro = layout_overrides.get("transfer", {})
-        wo = layout_overrides.get("withdraw", {})
-
-        # --- 신입생 ---
-        freshmen_rows = read_freshmen_rows(
-            freshmen_file,
-            data_start_row=fo.get("data_start_row"),   # 없으면 함수 안 기본값 사용
-        )
-
-        # --- 교사 ---
-        teacher_rows = read_teacher_rows(
-            teacher_file,
-            data_start_row=to.get("data_start_row"),
-        ) if teacher_file else []
-
-        # --- 전입 ---
-<<<<<<< HEAD
-=======
-        freshmen_rows = read_freshmen_rows(freshmen_file)
-        teacher_rows = read_teacher_rows(teacher_file) if teacher_file else []
-
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-        transfer_done_rows: List[Dict] = []
-        transfer_hold_rows: List[Dict] = []
-        if transfer_file:
-            if roster_info is None:
-                raise ValueError("[오류] 전입생 파일이 있는데 학생명부 분석 정보(roster_info)가 없습니다.")
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-            transfer_rows = read_transfer_rows(
-                transfer_file,
-                data_start_row=tro.get("data_start_row"),
-            )
-<<<<<<< HEAD
-=======
-            transfer_rows = read_transfer_rows(transfer_file)
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-            transfer_done_rows, transfer_hold_rows, _ = build_transfer_ids(
-=======
         # -------------------------------------------------
         # 3) 전입 ID 생성 (학생명부가 있는 경우에만)
         # -------------------------------------------------
@@ -4844,7 +3108,6 @@ def execute_pipeline(
             # roster_ws = roster_wb.worksheets[0]
 
             transfer_done_rows, transfer_hold_rows, prefix_by_grade = build_transfer_ids(
->>>>>>> 0f1c56e (20260227)
                 transfer_rows=transfer_rows,
                 roster_info=scan.roster_info,
                 input_year=year_int,
@@ -4874,36 +3137,6 @@ def execute_pipeline(
                 raise ValueError(f"[오류] 학생명부에 시트가 없습니다: {scan.roster_path.name}")
             roster_ws2 = sheets2[0]
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-        # --- 전출 ---
-=======
->>>>>>> f3aadff (Initial commit)
-=======
-        # --- 전출 ---
->>>>>>> 9bb7b8e (Add files via upload)
-        withdraw_done_rows = None
-        withdraw_hold_rows = None
-        if withdraw_file:
-            if roster_ws is None:
-                raise ValueError("[오류] 전출생 파일이 있는데 학생명부 시트가 로드되지 않았습니다.")
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-            withdraw_rows = read_withdraw_rows(
-                withdraw_file,
-                data_start_row=wo.get("data_start_row"),
-            )
-<<<<<<< HEAD
-=======
-            withdraw_rows = read_withdraw_rows(withdraw_file)
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
->>>>>>> 0f1c56e (20260227)
             withdraw_done_rows, withdraw_hold_rows = build_withdraw_outputs(
                 roster_ws=roster_ws2,
                 withdraw_rows=withdraw_rows,
@@ -4912,17 +3145,6 @@ def execute_pipeline(
                 roster_info=scan.roster_info,
             )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-        # --- 등록 파일 생성 ---
-=======
->>>>>>> f3aadff (Initial commit)
-=======
-        # --- 등록 파일 생성 ---
->>>>>>> 9bb7b8e (Add files via upload)
-        out_register = output_dir / f"★등록작업파일(작업용){year_str}.xlsx"
-=======
             transfer_out_auto_skip = sum(
                 1 for row in withdraw_hold_rows
                 if str(row.get("보류사유", "")).startswith("자동 제외")
@@ -4944,7 +3166,6 @@ def execute_pipeline(
 
         out_register_path = scan.output_dir / f"★{school_name}_등록작업파일(작업용).xlsx"
 
->>>>>>> 0f1c56e (20260227)
 
         fill_register(
             template_path=scan.template_register,
@@ -4992,19 +3213,6 @@ def execute_pipeline(
 
         out_notice_path = scan.output_dir / f"☆{school_name}_{title_middle}.xlsx"
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-        # --- 안내 파일 생성 ---
-=======
-        # 안내 파일 생성
->>>>>>> f3aadff (Initial commit)
-=======
-        # --- 안내 파일 생성 ---
->>>>>>> 9bb7b8e (Add files via upload)
-        out_notice = output_dir / f"☆{school_name}_{year_str}신입생,전입생,교직원_ID,PW안내.xlsx"
-=======
->>>>>>> 0f1c56e (20260227)
         build_notice_file(
             template_notice_path=scan.template_notice,
             out_notice_path=out_notice_path,
@@ -5014,42 +3222,14 @@ def execute_pipeline(
         )
         log(f"[OK] 안내파일 생성 완료: {out_notice_path.name}")
 
-<<<<<<< HEAD
-        kind_full, _ = school_kind_from_name(school_name)
-        if not kind_full:
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-            log("[WARN] 학교명 끝 글자가 초/중/고인지 확인하세요.")
-
-        # 전입/ 토원 처리 건수 집계
-        transfer_in_done = len(transfer_done_rows) if transfer_done_rows else 0
-        transfer_in_hold = len(transfer_hold_rows) if transfer_hold_rows else 0
-        transfer_out_done = len(withdraw_done_rows) if withdraw_done_rows else 0
-        transfer_out_hold = len(withdraw_hold_rows) if withdraw_hold_rows else 0
-
-        return PipelineResult(
-=======
         # -------------------------------------------------
         # 7) 결과 정리
         # -------------------------------------------------
         pr = PipelineResult(
->>>>>>> 0f1c56e (20260227)
             ok=True,
             outputs=[out_register_path, out_notice_path],
             logs=logs,
         )
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-            log("[WARN] 학교명 끝 글자가 초/중/고가 아니라 학교구분/학년 표기가 빈칸으로 들어갔을 수 있음")
-
-        return PipelineResult(ok=True, outputs=[out_register, out_notice], logs=logs)
->>>>>>> f3aadff (Initial commit)
-=======
->>>>>>> 9bb7b8e (Add files via upload)
-=======
         pr.transfer_in_done = len(transfer_done_rows)
         pr.transfer_in_hold = len(transfer_hold_rows)
         pr.transfer_out_done = len(withdraw_done_rows)
@@ -5058,7 +3238,6 @@ def execute_pipeline(
 
         log("[DONE] 실행 완료")
         return pr
->>>>>>> 0f1c56e (20260227)
 
     except Exception as e:
         log(f"[ERROR] {e}")
@@ -5071,79 +3250,6 @@ def execute_pipeline(
 # =========================
 # RUN PIPELINE (wrapper)
 # =========================
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-def generate_notice_mail_text(work_root: Path, school_name: str) -> Tuple[bool, str]:
-=======
-def generate_notice_mail_text(project_root: Path, school_name: str) -> Tuple[bool, str]:
->>>>>>> f3aadff (Initial commit)
-=======
-def generate_notice_mail_text(work_root: Path, school_name: str) -> Tuple[bool, str]:
->>>>>>> 9bb7b8e (Add files via upload)
-    """
-    UI에서 호출해서 사용자에게 복사 가능한 텍스트를 출력할 때 사용.
-    - DB F열 도메인 없으면: (False, 에러메시지)
-    - 템플릿 txt 없으면: (False, 에러메시지)
-    - 성공: (True, 렌더된 텍스트)
-    """
-    work_root = Path(work_root).resolve()
-    dirs = get_project_dirs(work_root)
-
-    domain = get_school_domain_from_db(dirs["DB"], school_name)
-    if not domain:
-        return False, domain_missing_message(school_name)
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-    tmpl = load_mail_template_text(work_root)
-    if not tmpl:
-        return False, "메일 템플릿(txt)을 찾지 못했습니다. [양식]/[안내문] 폴더에 텍스트 파일을 넣어주세요."
-=======
-    tmpl = load_mail_template_text(project_root)
-    if not tmpl:
-        return False, "메일 템플릿(txt)을 찾지 못했습니다. 포맷 폴더에 텍스트 파일을 넣어주세요."
->>>>>>> f3aadff (Initial commit)
-=======
-    tmpl = load_mail_template_text(work_root)
-    if not tmpl:
-        return False, "메일 템플릿(txt)을 찾지 못했습니다. [양식]/[안내문] 폴더에 텍스트 파일을 넣어주세요."
->>>>>>> 9bb7b8e (Add files via upload)
-
-    rendered = render_mail_text(tmpl, school_name=school_name, domain=domain)
-    return True, rendered
-
-
-# =========================
-# ENGINE ENTRYPOINT (compat)
-# =========================
-def run_pipeline(
-    work_root: Path,
-    school_name: str,
-    open_date: date,
-<<<<<<< HEAD
-<<<<<<< HEAD
-    layout_overrides: Optional[Dict[str, Dict[str, int]]] = None,
-=======
->>>>>>> f3aadff (Initial commit)
-=======
-    layout_overrides: Optional[Dict[str, Dict[str, int]]] = None,
->>>>>>> 9bb7b8e (Add files via upload)
-) -> PipelineResult:
-    """UI의 '전체 실행' 버튼용."""
-    scan = scan_pipeline(work_root=work_root, school_name=school_name, open_date=open_date)
-    if not scan.ok:
-        return PipelineResult(ok=False, outputs=[], logs=scan.logs)
-<<<<<<< HEAD
-<<<<<<< HEAD
-    return execute_pipeline(scan=scan, school_start_date=open_date, layout_overrides=layout_overrides)
-=======
-    return execute_pipeline(scan=scan, school_start_date=open_date)
->>>>>>> f3aadff (Initial commit)
-=======
-    return execute_pipeline(scan=scan, school_start_date=open_date, layout_overrides=layout_overrides)
->>>>>>> 9bb7b8e (Add files via upload)
-=======
 
 def run_pipeline(
     work_root: Path,
@@ -5155,7 +3261,6 @@ def run_pipeline(
 ) -> PipelineResult:
     """
     Streamlit에서 부르는 실제 실행 함수.
->>>>>>> 0f1c56e (20260227)
 
     - 1) scan_pipeline으로 인풋 상태 점검
     - 2) 문제 없으면 execute_pipeline으로 등록/안내 엑셀 파일 생성
@@ -5222,30 +3327,9 @@ def run_pipeline_partial(
 ) -> PipelineResult:
     """
     UI의 '부분 실행' 버튼용.
-<<<<<<< HEAD
-<<<<<<< HEAD
     현재는 안정성을 위해 전체 파이프라인을 재생성하는 방식으로 동작.
     mode: 'freshmen'|'teacher'|'transfer'|'withdraw' (지금은 아직 구분하지 않음)
     """
-<<<<<<< HEAD
-    return run_pipeline(work_root=work_root, school_name=school_name, open_date=open_date)
-=======
-    현재는 안정성을 위해 전체 파이프라인을 재생성하는 방식으로 동작합니다.
-    (운영 중 요구가 생기면, 기존 산출물에 대한 부분 업데이트 로직으로 확장 가능)
-    mode: 'freshmen'|'teacher'|'transfer'|'withdraw'
-    """
-    # v1: mode와 무관하게 동일 실행(스캔/템플릿/생성 일관성 유지)
-    return run_pipeline(work_root=work_root, school_name=school_name, open_date=open_date)
-
-
->>>>>>> f3aadff (Initial commit)
-=======
-    현재는 안정성을 위해 전체 파이프라인을 재생성하는 방식으로 동작.
-    mode: 'freshmen'|'teacher'|'transfer'|'withdraw'
-    """
-    return run_pipeline(work_root=work_root, school_name=school_name, open_date=open_date)
->>>>>>> 9bb7b8e (Add files via upload)
-=======
     # 부분 실행 분기 로직은 나중에 진짜 나누고,
     # 지금은 전체 run_pipeline을 그대로 돌린다.
     return run_pipeline(
@@ -5255,4 +3339,3 @@ def run_pipeline_partial(
         work_date=open_date,
         roster_basis_date=None,
     )
->>>>>>> 0f1c56e (20260227)
